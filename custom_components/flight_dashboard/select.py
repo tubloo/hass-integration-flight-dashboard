@@ -14,12 +14,23 @@ SENSOR_ENTITY_ID = "sensor.flight_dashboard_upcoming_flights"
 
 
 def _label_for_flight(f: dict[str, Any]) -> str:
+    dep = (f.get("dep") or {}).get("airport") or {}
+    arr = (f.get("arr") or {}).get("airport") or {}
+    dep_iata = dep.get("iata") or f.get("dep_iata") or ""
+    arr_iata = arr.get("iata") or f.get("arr_iata") or ""
+    date = (f.get("dep") or {}).get("scheduled") or ""
     return (
         f"{f.get('flight_key','')} | "
         f"{f.get('airline_code','')} {f.get('flight_number','')} "
-        f"{f.get('dep_airport','')}→{f.get('arr_airport','')} "
-        f"{f.get('scheduled_departure','')}"
+        f"{dep_iata}→{arr_iata} "
+        f"{date}"
     ).strip()
+
+
+def _extract_flight_key(option: str) -> str:
+    if " | " not in option:
+        return option.strip()
+    return option.split(" | ", 1)[0].strip()
 
 
 class FlightDashboardRemoveFlightSelect(SelectEntity):
@@ -73,5 +84,61 @@ class FlightDashboardRemoveFlightSelect(SelectEntity):
             self.async_write_ha_state()
 
 
+class FlightDashboardSelectedFlightSelect(SelectEntity):
+    _attr_name = "Flight Dashboard Selected Flight"
+    _attr_unique_id = "flight_dashboard_selected_flight"
+    _attr_icon = "mdi:airplane"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_options: list[str] = ["No flights"]
+        self._attr_current_option: str = "No flights"
+        self._unsub_state = None
+        self._unsub_bus = None
+
+    async def async_added_to_hass(self) -> None:
+        @callback
+        def _kick(_event=None) -> None:
+            self.hass.async_create_task(self._refresh_options())
+
+        self._unsub_state = async_track_state_change_event(self.hass, [SENSOR_ENTITY_ID], _kick)
+        self._unsub_bus = self.hass.bus.async_listen(EVENT_UPDATED, _kick)
+
+        await self._refresh_options()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub_state:
+            self._unsub_state()
+            self._unsub_state = None
+        if self._unsub_bus:
+            self._unsub_bus()
+            self._unsub_bus = None
+
+    async def _refresh_options(self) -> None:
+        st = self.hass.states.get(SENSOR_ENTITY_ID)
+        flights = (st.attributes.get("flights") if st else None) or []
+
+        opts = [_label_for_flight(f) for f in flights if f.get("flight_key")]
+        if not opts:
+            opts = ["No flights"]
+
+        self._attr_options = opts
+        if self._attr_current_option not in self._attr_options:
+            self._attr_current_option = self._attr_options[0]
+
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        if option in self._attr_options:
+            self._attr_current_option = option
+            self.async_write_ha_state()
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
-    async_add_entities([FlightDashboardRemoveFlightSelect(hass, entry)])
+    async_add_entities(
+        [
+            FlightDashboardRemoveFlightSelect(hass, entry),
+            FlightDashboardSelectedFlightSelect(hass, entry),
+        ]
+    )

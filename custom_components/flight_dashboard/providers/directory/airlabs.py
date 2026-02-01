@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+import logging
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 
@@ -21,14 +22,20 @@ class AirLabsDirectoryProvider:
 
     async def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
         session = async_get_clientsession(self.hass)
-        async with session.get(url, params=params, timeout=25) as resp:
-            payload = await resp.json(content_type=None)
-        return payload if isinstance(payload, dict) else None
+        try:
+            async with session.get(url, params=params, timeout=25) as resp:
+                payload = await resp.json(content_type=None)
+            return payload if isinstance(payload, dict) else None
+        except Exception as e:
+            _LOGGER.debug("AirLabs directory request failed: %s", e)
+            return None
 
     async def async_get_airport(self, iata: str) -> dict[str, Any] | None:
         url = "https://airlabs.co/api/v9/airports"
         payload = await self._get_json(url, {"api_key": self.api_key, "iata_code": iata.upper()})
         if not payload:
+            return None
+        if payload.get("error"):
             return None
         resp_obj = payload.get("response")
         if isinstance(resp_obj, list) and resp_obj:
@@ -39,7 +46,7 @@ class AirLabsDirectoryProvider:
                 "name": _first(a.get("name"), a.get("airport_name")),
                 "city": _first(a.get("city"), a.get("city_name")),
                 "country": _first(a.get("country_code"), a.get("country")),
-                "timezone": a.get("timezone"),
+                "tz": a.get("timezone"),
                 "lat": a.get("lat"),
                 "lon": a.get("lng"),
                 "source": "airlabs",
@@ -51,6 +58,8 @@ class AirLabsDirectoryProvider:
         payload = await self._get_json(url, {"api_key": self.api_key, "iata_code": iata.upper()})
         if not payload:
             return None
+        if payload.get("error"):
+            return None
         resp_obj = payload.get("response")
         if isinstance(resp_obj, list) and resp_obj:
             al = resp_obj[0]
@@ -60,6 +69,8 @@ class AirLabsDirectoryProvider:
                 "name": _first(al.get("name"), al.get("airline_name")),
                 "country": _first(al.get("country_code"), al.get("country")),
                 "callsign": al.get("callsign"),
+                "logo": al.get("logo") or al.get("logo_url"),
                 "source": "airlabs",
             }
         return None
+_LOGGER = logging.getLogger(__name__)

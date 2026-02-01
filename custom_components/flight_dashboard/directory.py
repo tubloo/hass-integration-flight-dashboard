@@ -1,81 +1,133 @@
-"""Provider-agnostic directory resolver with local cache."""
+"""Airport/airline directory lookup with optional caching."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .directory_store import async_get_cached, async_set_cached
 from .providers.directory.aviationstack import AviationstackDirectoryProvider
 from .providers.directory.airlabs import AirLabsDirectoryProvider
+from .providers.directory.fr24 import FR24DirectoryProvider
+from .directory_store import (
+    async_get_airport,
+    async_get_airline,
+    async_set_airport,
+    async_set_airline,
+    is_fresh,
+)
+from .airport_tz import get_airport_info
+from .rate_limit import is_blocked
 
-AIRPORTS_STORE_KEY = "flight_dashboard.airports_cache"
-AIRLINES_STORE_KEY = "flight_dashboard.airlines_cache"
+_LOGGER = logging.getLogger(__name__)
 
-DEFAULT_AIRPORT_TTL_DAYS = 180
-DEFAULT_AIRLINE_TTL_DAYS = 180
-
-
-def airline_logo_url(iata: str, *, w: int = 64, h: int = 64) -> str:
-    code = (iata or "").strip().upper()
-    # URL-based logos (works well for many airlines)
-    return f"https://pics.avs.io/{w}/{h}/{code}.png"
-
-
-def _build_providers(hass: HomeAssistant, options: dict[str, Any]):
-    providers = []
-    av_key = (options.get("aviationstack_access_key") or "").strip()
-    al_key = (options.get("airlabs_api_key") or "").strip()
-
-    if av_key:
-        providers.append(AviationstackDirectoryProvider(hass, av_key))
-    if al_key:
-        providers.append(AirLabsDirectoryProvider(hass, al_key))
-    return providers
-
-
-async def async_get_airport(hass: HomeAssistant, options: dict[str, Any], iata: str) -> dict[str, Any] | None:
-    code = (iata or "").strip().upper()
+def airline_logo_url(iata: str | None) -> str | None:
+    """Return a lightweight logo URL for airline IATA code."""
+    if not iata:
+        return None
+    code = str(iata).strip().upper()
     if not code:
         return None
+    return f"https://pics.avs.io/64/64/{code}.png"
 
-    ttl = int(options.get("airport_ttl_days", DEFAULT_AIRPORT_TTL_DAYS))
-    cached = await async_get_cached(hass, store_key=AIRPORTS_STORE_KEY, code=code, ttl_days=ttl)
-    if cached:
-        return cached
 
-    for p in _build_providers(hass, options):
+def _get_option(options: dict[str, Any], key: str, default: Any) -> Any:
+    val = options.get(key, default)
+    return val if val is not None else default
+
+
+async def get_airport(hass: HomeAssistant, options: dict[str, Any], iata: str) -> dict[str, Any] | None:
+    iata = (iata or "").strip().upper()
+    if not iata:
+        return None
+
+    cache_enabled = bool(_get_option(options, "cache_directory", True))
+    ttl_days = int(_get_option(options, "cache_ttl_days", 180))
+
+    def _is_complete_airport(data: dict[str, Any] | None) -> bool:
+        if not isinstance(data, dict):
+            return False
+        return bool(data.get("name") and data.get("city") and data.get("tz"))
+
+    if cache_enabled:
+        cached = await async_get_airport(hass, iata)
+        if is_fresh(cached, ttl_days) and _is_complete_airport(cached):
+            return cached
+
+    av_key = (options.get("aviationstack_access_key") or "").strip()
+    al_key = (options.get("airlabs_api_key") or "").strip()
+    fr24_key = (options.get("fr24_api_key") or "").strip()
+    fr24_sandbox_key = (options.get("fr24_sandbox_key") or "").strip()
+    fr24_use_sandbox = bool(options.get("fr24_use_sandbox", False))
+    fr24_version = (options.get("fr24_api_version") or "v1").strip()
+    fr24_active_key = fr24_sandbox_key if fr24_use_sandbox and fr24_sandbox_key else fr24_key
+
+    providers = []
+    if av_key and not is_blocked(hass, "aviationstack"):
+        providers.append(AviationstackDirectoryProvider(hass, av_key))
+    if al_key and not is_blocked(hass, "airlabs"):
+        providers.append(AirLabsDirectoryProvider(hass, al_key))
+    if fr24_active_key and not is_blocked(hass, "fr24"):
+        providers.append(FR24DirectoryProvider(hass, fr24_active_key, use_sandbox=fr24_use_sandbox, api_version=fr24_version))
+
+    for p in providers:
         try:
-            a = await p.async_get_airport(code)
-        except Exception:
-            a = None
-        if a:
-            await async_set_cached(hass, store_key=AIRPORTS_STORE_KEY, code=code, payload=a)
-            return a
+            data = await p.async_get_airport(iata)
+        except Exception as e:
+            _LOGGER.debug("Directory provider failed for airport %s: %s", iata, e)
+            data = None
+        if data:
+            # Merge with static fallback to fill missing fields (do not overwrite with nulls)
+            fallback = get_airport_info(iata, options) or {}
+            merged = dict(fallback)
+            for k, v in data.items():
+                if v is not None and v != "":
+                    merged[k] = v
+            if cache_enabled:
+                await async_set_airport(hass, iata, merged)
+            return merged
+
+    # Static fallback map (name/city/tz) if providers miss
+    fallback = get_airport_info(iata, options)
+    if fallback:
+        if cache_enabled:
+            await async_set_airport(hass, iata, fallback)
+        return fallback
 
     return None
 
 
-async def async_get_airline(hass: HomeAssistant, options: dict[str, Any], iata: str) -> dict[str, Any] | None:
-    code = (iata or "").strip().upper()
-    if not code:
+async def get_airline(hass: HomeAssistant, options: dict[str, Any], iata: str) -> dict[str, Any] | None:
+    iata = (iata or "").strip().upper()
+    if not iata:
         return None
 
-    ttl = int(options.get("airline_ttl_days", DEFAULT_AIRLINE_TTL_DAYS))
-    cached = await async_get_cached(hass, store_key=AIRLINES_STORE_KEY, code=code, ttl_days=ttl)
-    if cached:
-        cached.setdefault("logo_url", airline_logo_url(code))
-        return cached
+    cache_enabled = bool(_get_option(options, "cache_directory", True))
+    ttl_days = int(_get_option(options, "cache_ttl_days", 180))
 
-    for p in _build_providers(hass, options):
+    if cache_enabled:
+        cached = await async_get_airline(hass, iata)
+        if is_fresh(cached, ttl_days):
+            return cached
+
+    av_key = (options.get("aviationstack_access_key") or "").strip()
+    al_key = (options.get("airlabs_api_key") or "").strip()
+
+    providers = []
+    if av_key:
+        providers.append(AviationstackDirectoryProvider(hass, av_key))
+    if al_key:
+        providers.append(AirLabsDirectoryProvider(hass, al_key))
+
+    for p in providers:
         try:
-            al = await p.async_get_airline(code)
-        except Exception:
-            al = None
-        if al:
-            al["logo_url"] = airline_logo_url(code)
-            await async_set_cached(hass, store_key=AIRLINES_STORE_KEY, code=code, payload=al)
-            return al
+            data = await p.async_get_airline(iata)
+        except Exception as e:
+            _LOGGER.debug("Directory provider failed for airline %s: %s", iata, e)
+            data = None
+        if data:
+            if cache_enabled:
+                await async_set_airline(hass, iata, data)
+            return data
 
-    # Still give a logo URL even if name lookup fails
-    return {"iata": code, "logo_url": airline_logo_url(code), "source": "fallback"}
+    return None

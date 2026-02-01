@@ -10,6 +10,32 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .base import FlightStatus
 
 
+def _retry_after_from_code(code: str) -> int | None:
+    if code == "minute_limit_exceeded":
+        return 60
+    if code == "hour_limit_exceeded":
+        return 60 * 60
+    if code == "month_limit_exceeded":
+        return 24 * 60 * 60
+    return None
+
+
+def _error_type(code: str, message: str) -> str:
+    code_l = (code or "").lower()
+    msg_l = (message or "").lower()
+    if code_l in {"minute_limit_exceeded", "hour_limit_exceeded"} or "rate" in msg_l or "limit" in msg_l:
+        return "rate_limited"
+    if code_l in {"month_limit_exceeded"} or "quota" in msg_l:
+        return "quota_exceeded"
+    if code_l in {"unknown_api_key", "expired_api_key"} or "api key" in msg_l:
+        return "auth_error"
+    if code_l in {"wrong_params", "unknown_method"}:
+        return "bad_request"
+    if code_l == "not_found":
+        return "no_match"
+    return "provider_error"
+
+
 def _iso(s: str | None) -> str | None:
     if not s:
         return None
@@ -39,7 +65,34 @@ class AirLabsStatusProvider:
         session = async_get_clientsession(self.hass)
         async with session.get(url, params=params, timeout=25) as resp:
             payload = await resp.json(content_type=None)
+            retry_after = resp.headers.get("Retry-After")
 
+        if isinstance(payload, dict) and payload.get("error"):
+            err = payload.get("error")
+            if isinstance(err, dict):
+                code = str(err.get("code") or "")
+                message = str(err.get("message") or "")
+            else:
+                code = ""
+                message = str(err)
+            err_type = _error_type(code, message)
+            ra = int(retry_after) if retry_after and retry_after.isdigit() else _retry_after_from_code(code)
+            details = {
+                "provider": "airlabs",
+                "state": "unknown",
+                "error": err_type,
+                "error_code": code or None,
+                "error_message": message or str(err),
+            }
+            if ra:
+                details["retry_after"] = ra
+            return FlightStatus(provider="airlabs", state="unknown", details=details)
+
+        if isinstance(payload, dict) and resp.status in (429, 402):
+            details = {"provider": "airlabs", "state": "unknown", "error": "rate_limited"}
+            if retry_after and retry_after.isdigit():
+                details["retry_after"] = int(retry_after)
+            return FlightStatus(provider="airlabs", state="unknown", details=details)
         resp_obj = payload.get("response") if isinstance(payload, dict) else None
         if not isinstance(resp_obj, dict):
             # Sometimes errors are in payload["error"]

@@ -26,11 +26,14 @@ CONF_MAX_FLIGHTS = "max_flights"
 CONF_MERGE_TOLERANCE_HOURS = "merge_tolerance_hours"
 CONF_AUTO_PRUNE_LANDED = "auto_prune_landed"
 CONF_PRUNE_LANDED_HOURS = "prune_landed_hours"
+CONF_CACHE_DIRECTORY = "cache_directory"
+CONF_CACHE_TTL_DAYS = "cache_ttl_days"
 
 # Status options
 CONF_STATUS_PROVIDER = "status_provider"  # local|aviationstack|airlabs|opensky|flightradar24
 CONF_SCHEDULE_PROVIDER = "schedule_provider"  # auto|aviationstack|airlabs|flightradar24|mock
 CONF_STATUS_TTL_MINUTES = "status_ttl_minutes"
+CONF_DELAY_GRACE_MINUTES = "delay_grace_minutes"
 CONF_AVIATIONSTACK_KEY = "aviationstack_access_key"
 CONF_AIRLABS_KEY = "airlabs_api_key"
 CONF_OPENSKY_USERNAME = "opensky_username"
@@ -59,10 +62,13 @@ DEFAULT_MAX_FLIGHTS = 50
 DEFAULT_MERGE_TOLERANCE_HOURS = 6
 DEFAULT_AUTO_PRUNE_LANDED = False
 DEFAULT_PRUNE_LANDED_HOURS = 0
+DEFAULT_CACHE_DIRECTORY = True
+DEFAULT_CACHE_TTL_DAYS = 180
 
 DEFAULT_STATUS_PROVIDER = "flightradar24"
 DEFAULT_SCHEDULE_PROVIDER = "auto"
 DEFAULT_STATUS_TTL_MINUTES = 5
+DEFAULT_DELAY_GRACE_MINUTES = 10
 
 DEFAULT_FR24_USE_SANDBOX = False
 DEFAULT_FR24_API_VERSION = "v1"
@@ -102,11 +108,14 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
             options[CONF_MERGE_TOLERANCE_HOURS] = user_input[CONF_MERGE_TOLERANCE_HOURS]
             options[CONF_AUTO_PRUNE_LANDED] = bool(user_input.get(CONF_AUTO_PRUNE_LANDED, False))
             options[CONF_PRUNE_LANDED_HOURS] = int(user_input.get(CONF_PRUNE_LANDED_HOURS, 0))
+            options[CONF_CACHE_DIRECTORY] = bool(user_input.get(CONF_CACHE_DIRECTORY, DEFAULT_CACHE_DIRECTORY))
+            options[CONF_CACHE_TTL_DAYS] = int(user_input.get(CONF_CACHE_TTL_DAYS, DEFAULT_CACHE_TTL_DAYS))
 
             # Status
             options[CONF_STATUS_PROVIDER] = user_input[CONF_STATUS_PROVIDER]
             options[CONF_SCHEDULE_PROVIDER] = user_input[CONF_SCHEDULE_PROVIDER]
             options[CONF_STATUS_TTL_MINUTES] = user_input[CONF_STATUS_TTL_MINUTES]
+            options[CONF_DELAY_GRACE_MINUTES] = user_input[CONF_DELAY_GRACE_MINUTES]
             options[CONF_AVIATIONSTACK_KEY] = user_input.get(CONF_AVIATIONSTACK_KEY, "").strip()
             options[CONF_AIRLABS_KEY] = user_input.get(CONF_AIRLABS_KEY, "").strip()
             options[CONF_OPENSKY_USERNAME] = user_input.get(CONF_OPENSKY_USERNAME, "").strip()
@@ -136,10 +145,13 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
         tolerance = options.get(CONF_MERGE_TOLERANCE_HOURS, DEFAULT_MERGE_TOLERANCE_HOURS)
         auto_prune = options.get(CONF_AUTO_PRUNE_LANDED, DEFAULT_AUTO_PRUNE_LANDED)
         prune_hours = options.get(CONF_PRUNE_LANDED_HOURS, DEFAULT_PRUNE_LANDED_HOURS)
+        cache_dir = options.get(CONF_CACHE_DIRECTORY, DEFAULT_CACHE_DIRECTORY)
+        cache_ttl_days = options.get(CONF_CACHE_TTL_DAYS, DEFAULT_CACHE_TTL_DAYS)
 
         status_provider = options.get(CONF_STATUS_PROVIDER, DEFAULT_STATUS_PROVIDER)
         schedule_provider = options.get(CONF_SCHEDULE_PROVIDER, DEFAULT_SCHEDULE_PROVIDER)
         ttl = options.get(CONF_STATUS_TTL_MINUTES, DEFAULT_STATUS_TTL_MINUTES)
+        grace = options.get(CONF_DELAY_GRACE_MINUTES, DEFAULT_DELAY_GRACE_MINUTES)
         av_key = options.get(CONF_AVIATIONSTACK_KEY, "")
         al_key = options.get(CONF_AIRLABS_KEY, "")
         os_user = options.get(CONF_OPENSKY_USERNAME, "")
@@ -207,6 +219,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                 # Status provider
                 vol.Required(CONF_STATUS_PROVIDER, default=status_provider): status_selector,
                 vol.Required(CONF_STATUS_TTL_MINUTES, default=ttl): vol.All(int, vol.Clamp(min=1, max=120)),
+                vol.Required(CONF_DELAY_GRACE_MINUTES, default=grace): vol.All(int, vol.Clamp(min=0, max=60)),
                 vol.Optional(CONF_FR24_API_KEY, default=fr24_key): str,
                 vol.Optional(CONF_FR24_SANDBOX_KEY, default=fr24_sandbox_key): str,
                 vol.Optional(CONF_FR24_USE_SANDBOX, default=fr24_sandbox): bool,
@@ -221,6 +234,8 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Required(CONF_MERGE_TOLERANCE_HOURS, default=tolerance): vol.All(int, vol.Clamp(min=0, max=48)),
                 vol.Optional(CONF_AUTO_PRUNE_LANDED, default=auto_prune): bool,
                 vol.Optional(CONF_PRUNE_LANDED_HOURS, default=prune_hours): vol.All(int, vol.Clamp(min=0, max=168)),
+                vol.Optional(CONF_CACHE_DIRECTORY, default=cache_dir): bool,
+                vol.Optional(CONF_CACHE_TTL_DAYS, default=cache_ttl_days): vol.All(int, vol.Clamp(min=1, max=3650)),
             }
         )
 

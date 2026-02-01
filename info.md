@@ -8,3 +8,4 @@ Track upcoming flights in Home Assistant with minimal input.
 - Smart status refresh with API call rationing
 - On-demand refresh button/service
 - Optional auto-removal of landed/cancelled manual flights
+- Optional airport/airline directory cache (default 180 days)

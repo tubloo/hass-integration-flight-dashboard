@@ -9,6 +9,8 @@ Canonical additions:
 from __future__ import annotations
 
 from datetime import datetime
+import re
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -38,6 +40,34 @@ def _pick_str(*vals: Any) -> str | None:
             # allow provider to pass non-string identifiers (e.g. dict), but ignore by default
             continue
     return None
+
+
+_TZ_RE = re.compile(r"(Z|[+-]\\d{2}:\\d{2})$")
+
+
+def _has_tz(s: str | None) -> bool:
+    if not s or not isinstance(s, str):
+        return False
+    return _TZ_RE.search(s.strip()) is not None
+
+
+def _normalize_iso_in_tz(val: str | None, tzname: str | None) -> str | None:
+    """Normalize a naive ISO string using an airport timezone, return UTC ISO."""
+    if not val:
+        return None
+    if _has_tz(val):
+        return val
+    if not tzname:
+        return val
+    try:
+        dt = datetime.fromisoformat(val.replace("Z", "+00:00").replace(" ", "T"))
+    except Exception:
+        return val
+    try:
+        dt = dt.replace(tzinfo=ZoneInfo(tzname))
+    except Exception:
+        return val
+    return dt_util.as_utc(dt).isoformat()
 
 
 def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[str, Any]:
@@ -89,6 +119,9 @@ def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[
     if status.get("arr_airport_city") and not arr_air.get("city"):
         arr_air["city"] = status.get("arr_airport_city")
 
+    if status.get("position"):
+        flight["position"] = status.get("position")
+
     # aircraft type (provider-agnostic mapping)
     # Accept a few common keys so different providers can normalize into this resolver:
     # - "aircraft_type" (preferred)
@@ -106,6 +139,19 @@ def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[
 
     dep["airport"] = dep_air
     arr["airport"] = arr_air
+    flight["dep"] = dep
+    flight["arr"] = arr
+
+    # Normalize naive timestamps using airport timezone (if available)
+    dep_tz = dep_air.get("tz")
+    arr_tz = arr_air.get("tz")
+    dep["scheduled"] = _normalize_iso_in_tz(dep.get("scheduled"), dep_tz)
+    dep["estimated"] = _normalize_iso_in_tz(dep.get("estimated"), dep_tz)
+    dep["actual"] = _normalize_iso_in_tz(dep.get("actual"), dep_tz)
+    arr["scheduled"] = _normalize_iso_in_tz(arr.get("scheduled"), arr_tz)
+    arr["estimated"] = _normalize_iso_in_tz(arr.get("estimated"), arr_tz)
+    arr["actual"] = _normalize_iso_in_tz(arr.get("actual"), arr_tz)
+
     flight["dep"] = dep
     flight["arr"] = arr
     return flight

@@ -6,10 +6,11 @@ can import the names they expect without crashing HA at import time.
 from __future__ import annotations
 
 DOMAIN = "flight_dashboard"
+STORAGE_KEY_DIRECTORY = f"{DOMAIN}.directory_cache"
 
 # Keep platforms minimal while we stabilize.
 # Add "button"/"select" back only when those files are consistent.
-PLATFORMS: list[str] = ["sensor", "select", "button"]
+PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "button"]
 
 # Schema
 SCHEMA_VERSION = 3

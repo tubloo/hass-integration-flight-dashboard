@@ -3,6 +3,7 @@
 ## Architecture Overview
 - **Services**: `services_preview.py` exposes preview/add/confirm flows.
 - **Storage**: `manual_store.py` persists canonical flights, `storage.py` persists preview and cache.
+- **Directory cache**: `directory_store.py` stores airports/airlines with TTL.
 - **Schedule lookup**: `schedule_lookup.py` enriches minimal inputs using provider APIs.
 - **Status**: `status_manager.py` applies cached status and schedules smart refreshes.
 - **Sensor**: `sensor.py` exposes the unified flight list in attributes.

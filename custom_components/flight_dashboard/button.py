@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, EVENT_UPDATED
 from .services import SERVICE_CLEAR, SERVICE_REMOVE
-from .const import SERVICE_REFRESH_NOW
+from .const import SERVICE_REFRESH_NOW, SERVICE_PRUNE_LANDED
 from .preview_store import async_get_preview, async_set_preview
 from .manual_store import async_add_manual_flight_record
 
@@ -107,6 +107,18 @@ class FlightDashboardRefreshNowButton(ButtonEntity):
 
     async def async_press(self) -> None:
         await self.hass.services.async_call(DOMAIN, SERVICE_REFRESH_NOW, {}, blocking=True)
+
+
+class FlightDashboardPruneLandedButton(ButtonEntity):
+    _attr_name = "Flight Dashboard Remove Landed Flights"
+    _attr_unique_id = "flight_dashboard_remove_landed"
+    _attr_icon = "mdi:airplane-off"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def async_press(self) -> None:
+        await self.hass.services.async_call(DOMAIN, SERVICE_PRUNE_LANDED, {}, blocking=True)
 
 
 class FlightDashboardConfirmAddPreviewButton(ButtonEntity):
@@ -212,6 +224,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             FlightDashboardRemoveSelectedFlightButton(hass),
             FlightDashboardClearManualFlightsButton(hass),
             FlightDashboardRefreshNowButton(hass),
+            FlightDashboardPruneLandedButton(hass),
             FlightDashboardConfirmAddPreviewButton(hass),
             FlightDashboardClearAddPreviewButton(hass),
         ]

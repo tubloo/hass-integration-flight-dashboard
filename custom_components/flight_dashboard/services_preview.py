@@ -34,7 +34,9 @@ from .const import (
 )
 from .manual_store import async_add_manual_flight_record
 from .schedule_lookup import lookup_schedule
-from .directory import airline_logo_url
+from .directory import airline_logo_url, get_airport, get_airline
+from .tz_short import tz_short_name
+from .airport_tz import get_airport_info
 from .storage import async_load_preview, async_save_preview, async_clear_preview
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,11 +93,21 @@ def _preview_complete(flight: dict[str, Any] | None) -> tuple[bool, str | None]:
         return False, "No preview flight data."
     dep_airport = ((flight.get("dep") or {}).get("airport") or {}).get("iata")
     arr_airport = ((flight.get("arr") or {}).get("airport") or {}).get("iata")
-    dep_sched = (flight.get("dep") or {}).get("scheduled")
+    dep = (flight.get("dep") or {})
+    arr = (flight.get("arr") or {})
+    dep_air = (dep.get("airport") or {})
+    arr_air = (arr.get("airport") or {})
+    dep_sched = dep.get("scheduled")
+    arr_sched = arr.get("scheduled")
     if not dep_airport or not arr_airport:
         return False, "Missing departure/arrival airport. Try another provider or verify the date."
-    if not dep_sched:
-        return False, "Missing scheduled departure time. Try another provider or verify the date."
+    if not dep_sched or not arr_sched:
+        return False, "Missing scheduled departure/arrival time. Try another provider or verify the date."
+    # Require name (or city) + tz, but allow missing city with warning
+    if not (dep_air.get("name") or dep_air.get("city")) or not dep_air.get("tz"):
+        return False, f"Missing departure airport details for {dep_airport}. Check directory provider keys."
+    if not (arr_air.get("name") or arr_air.get("city")) or not arr_air.get("tz"):
+        return False, f"Missing arrival airport details for {arr_airport}. Check directory provider keys."
     return True, None
 
 
@@ -224,6 +236,58 @@ async def async_register_preview_services(
             else:
                 preview["flight"] = flight
             preview["status_raw"] = status_raw
+            # Enrich preview with directory data (airport/airline) before completeness check
+            f = preview.get("flight") or {}
+            dep = (f.get("dep") or {})
+            arr = (f.get("arr") or {})
+            dep_air = (dep.get("airport") or {})
+            arr_air = (arr.get("airport") or {})
+
+            if f.get("airline_code") and not f.get("airline_name"):
+                airline = await get_airline(hass, options, f.get("airline_code"))
+                if airline:
+                    f["airline_name"] = airline.get("name") or f.get("airline_name")
+                    if not f.get("airline_logo_url"):
+                        f["airline_logo_url"] = airline.get("logo") or f.get("airline_logo_url")
+
+            if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
+                airport = await get_airport(hass, options, dep_air.get("iata"))
+                if airport:
+                    dep_air["name"] = dep_air.get("name") or airport.get("name")
+                    dep_air["city"] = dep_air.get("city") or airport.get("city")
+                    dep_air["tz"] = dep_air.get("tz") or airport.get("tz")
+            if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
+                airport = await get_airport(hass, options, arr_air.get("iata"))
+                if airport:
+                    arr_air["name"] = arr_air.get("name") or airport.get("name")
+                    arr_air["city"] = arr_air.get("city") or airport.get("city")
+                    arr_air["tz"] = arr_air.get("tz") or airport.get("tz")
+
+            # Final fallback for missing city/name/tz from static map
+            if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
+                info = get_airport_info(dep_air.get("iata"), options) or {}
+                dep_air["name"] = dep_air.get("name") or info.get("name")
+                dep_air["city"] = dep_air.get("city") or info.get("city")
+                dep_air["tz"] = dep_air.get("tz") or info.get("tz")
+            if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
+                info = get_airport_info(arr_air.get("iata"), options) or {}
+                arr_air["name"] = arr_air.get("name") or info.get("name")
+                arr_air["city"] = arr_air.get("city") or info.get("city")
+                arr_air["tz"] = arr_air.get("tz") or info.get("tz")
+
+            dep_sched = dep.get("scheduled")
+            arr_sched = arr.get("scheduled")
+            if dep_air.get("tz") and not dep_air.get("tz_short"):
+                dep_air["tz_short"] = tz_short_name(dep_air.get("tz"), dep_sched)
+            if arr_air.get("tz") and not arr_air.get("tz_short"):
+                arr_air["tz_short"] = tz_short_name(arr_air.get("tz"), arr_sched)
+
+            dep["airport"] = dep_air
+            arr["airport"] = arr_air
+            f["dep"] = dep
+            f["arr"] = arr
+            preview["flight"] = f
+
             ready, hint = _preview_complete(preview.get("flight"))
             preview["ready"] = ready
             preview["error"] = None if ready else "incomplete"
@@ -235,6 +299,37 @@ async def async_register_preview_services(
                     title="Flight Dashboard — Preview incomplete",
                     notification_id="flight_dashboard_preview_incomplete",
                 )
+            # Warn (but allow add) if logo is missing
+            if ready:
+                f = preview.get("flight") or {}
+                if not f.get("airline_logo_url"):
+                    f["airline_logo_url"] = airline_logo_url(airline)
+                if not f.get("airline_logo_url"):
+                    preview["warning"] = "Airline logo not available."
+                    persistent_notification.async_create(
+                        hass,
+                        "Airline logo not available for this flight.",
+                        title="Flight Dashboard — Preview warning",
+                        notification_id="flight_dashboard_preview_warning",
+                    )
+                # Warn if city is missing but allow add
+                dep_air = ((f.get("dep") or {}).get("airport") or {})
+                arr_air = ((f.get("arr") or {}).get("airport") or {})
+                missing_city = []
+                if dep_air.get("iata") and not dep_air.get("city"):
+                    missing_city.append(dep_air.get("iata"))
+                if arr_air.get("iata") and not arr_air.get("city"):
+                    missing_city.append(arr_air.get("iata"))
+                if missing_city:
+                    preview["warning"] = (preview.get("warning") + " " if preview.get("warning") else "") + (
+                        "Airport city missing for: " + ", ".join(missing_city)
+                    )
+                    persistent_notification.async_create(
+                        hass,
+                        f"Airport city missing for: {', '.join(missing_city)}",
+                        title="Flight Dashboard — Preview warning",
+                        notification_id="flight_dashboard_preview_city_missing",
+                    )
         else:
             preview["flight"] = flight
             preview["ready"] = False

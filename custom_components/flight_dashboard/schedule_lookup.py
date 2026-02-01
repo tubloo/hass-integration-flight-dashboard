@@ -16,9 +16,11 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from .rate_limit import is_blocked, set_block
 
 # We read options from the integration options dict that you already store
 DOMAIN = "flight_dashboard"
@@ -56,6 +58,51 @@ def _iso(dt: datetime | None) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
+
+
+_TZ_RE = re.compile(r"(Z|[+-]\\d{2}:\\d{2})$")
+
+
+def _has_tz(s: str | None) -> bool:
+    if not s or not isinstance(s, str):
+        return False
+    return _TZ_RE.search(s.strip()) is not None
+
+
+def _normalize_iso_in_tz(val: str | None, tzname: str | None) -> str | None:
+    if not val:
+        return None
+    if _has_tz(val):
+        return val
+    if not tzname:
+        return val
+    try:
+        dt = datetime.fromisoformat(val.replace("Z", "+00:00").replace(" ", "T"))
+    except Exception:
+        return val
+    try:
+        dt = dt.replace(tzinfo=ZoneInfo(tzname))
+    except Exception:
+        return val
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _normalize_flight_times(flight: dict[str, Any]) -> dict[str, Any]:
+    dep = flight.get("dep") or {}
+    arr = flight.get("arr") or {}
+    dep_air = dep.get("airport") or {}
+    arr_air = arr.get("airport") or {}
+    dep_tz = dep_air.get("tz")
+    arr_tz = arr_air.get("tz")
+    dep["scheduled"] = _normalize_iso_in_tz(dep.get("scheduled"), dep_tz)
+    dep["estimated"] = _normalize_iso_in_tz(dep.get("estimated"), dep_tz)
+    dep["actual"] = _normalize_iso_in_tz(dep.get("actual"), dep_tz)
+    arr["scheduled"] = _normalize_iso_in_tz(arr.get("scheduled"), arr_tz)
+    arr["estimated"] = _normalize_iso_in_tz(arr.get("estimated"), arr_tz)
+    arr["actual"] = _normalize_iso_in_tz(arr.get("actual"), arr_tz)
+    flight["dep"] = dep
+    flight["arr"] = arr
+    return flight
 
 
 async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: str, date_str: str) -> dict[str, Any]:
@@ -113,7 +160,7 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
                 return {"flight": rec, "provider": "mock"}
 
     # Import lazily so missing deps won't crash HA if provider not used
-    if "flightradar24" in order and fr24_active_key:
+    if "flightradar24" in order and fr24_active_key and not is_blocked(hass, "fr24"):
         try:
             from .providers.status.flightradar24 import Flightradar24StatusProvider
         except Exception as e:
@@ -139,8 +186,18 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
             }
             _LOGGER.debug("FR24 schedule lookup for %s %s on %s", airline_code, flight_number, date_str)
             st = await statusp.async_get_status(flight_shell)
+            if isinstance(st, dict) and st.get("error") in ("rate_limited", "quota_exceeded"):
+                reason = st.get("error")
+                block_for = st.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+                set_block(hass, "fr24", block_for, reason)
+                st = None
             if st and st.get("error"):
                 _LOGGER.warning("FR24 schedule lookup error: %s", st.get("detail") or st.get("error"))
+                err = st.get("error")
+                if err == "quota_exceeded":
+                    return {"error": "provider_error", "hint": "FR24 quota exceeded. Try again later."}
+                if err == "rate_limited":
+                    return {"error": "provider_error", "hint": "FR24 rate limit reached. Try again later."}
                 return {"error": "provider_error", "hint": st.get("detail") or "FR24 error"}
             if st and not st.get("error"):
                 # Prefer true scheduled timestamps. Do not substitute estimated/actual.
@@ -181,11 +238,11 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
                         "gate": st.get("gate_arr"),
                     },
                 }
-                return {"flight": flight, "provider": "flightradar24"}
+                return {"flight": _normalize_flight_times(flight), "provider": "flightradar24"}
         else:
             _LOGGER.warning("FR24 status provider could not be loaded.")
 
-    if "aviationstack" in order and av_key:
+    if "aviationstack" in order and av_key and not is_blocked(hass, "aviationstack"):
         try:
             from .providers.status.aviationstack import AviationstackStatusProvider
         except Exception:
@@ -230,11 +287,20 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
                         "gate": details.get("gate_arr"),
                     },
                 }
-                return {"flight": flight, "provider": "aviationstack"}
+                return {"flight": _normalize_flight_times(flight), "provider": "aviationstack"}
+            if isinstance(details, dict) and details.get("error") in ("rate_limited", "quota_exceeded"):
+                reason = details.get("error")
+                block_for = details.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+                set_block(hass, "aviationstack", block_for, reason)
+                details = None
             if isinstance(details, dict) and details.get("error"):
                 _LOGGER.warning("Aviationstack schedule lookup error: %s", details.get("error"))
+                if details.get("error") == "quota_exceeded":
+                    return {"error": "provider_error", "hint": "Aviationstack quota exceeded. Try again later."}
+                if details.get("error") == "rate_limited":
+                    return {"error": "provider_error", "hint": "Aviationstack rate limit reached. Try again later."}
 
-    if "airlabs" in order and al_key:
+    if "airlabs" in order and al_key and not is_blocked(hass, "airlabs"):
         try:
             from .providers.status.airlabs import AirLabsStatusProvider
         except Exception:
@@ -279,9 +345,18 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
                         "gate": details.get("gate_arr"),
                     },
                 }
-                return {"flight": flight, "provider": "airlabs"}
+                return {"flight": _normalize_flight_times(flight), "provider": "airlabs"}
+            if isinstance(details, dict) and details.get("error") in ("rate_limited", "quota_exceeded"):
+                reason = details.get("error")
+                block_for = details.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+                set_block(hass, "airlabs", block_for, reason)
+                details = None
             if isinstance(details, dict) and details.get("error"):
                 _LOGGER.warning("AirLabs schedule lookup error: %s", details.get("error"))
+                if details.get("error") == "quota_exceeded":
+                    return {"error": "provider_error", "hint": "AirLabs quota exceeded. Try again later."}
+                if details.get("error") == "rate_limited":
+                    return {"error": "provider_error", "hint": "AirLabs rate limit reached. Try again later."}
 
     # If no provider keys configured
     if not (av_key or al_key or fr24_key):

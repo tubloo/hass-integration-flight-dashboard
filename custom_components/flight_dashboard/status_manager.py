@@ -9,10 +9,12 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .status_resolver import apply_status
+from .rate_limit import is_blocked, set_block
 from .manual_store import async_update_manual_flight
 
 
 STATUS_CACHE_KEY = "status_cache"
+CONF_DELAY_GRACE_MINUTES = "delay_grace_minutes"
 
 
 def _status_cache(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -42,6 +44,38 @@ def _best_time(flight: dict[str, Any], side: str, keys: list[str]) -> datetime |
         if dt:
             return dt_util.as_utc(dt) if dt.tzinfo else dt_util.as_utc(dt_util.as_local(dt))
     return None
+
+
+def _compute_delay_status(flight: dict[str, Any], grace_minutes: int) -> tuple[str, int | None]:
+    state = (flight.get("status_state") or "unknown").lower()
+    if state in ("cancelled", "canceled"):
+        return "cancelled", None
+    if state == "landed":
+        return "arrived", None
+
+    dep = flight.get("dep") or {}
+    arr = flight.get("arr") or {}
+
+    dep_sched = _parse_dt(dep.get("scheduled"))
+    dep_est = _parse_dt(dep.get("actual") or dep.get("estimated"))
+    arr_sched = _parse_dt(arr.get("scheduled"))
+    arr_est = _parse_dt(arr.get("actual") or arr.get("estimated"))
+
+    ref_sched = None
+    ref_est = None
+    if arr_sched and arr_est:
+        ref_sched, ref_est = arr_sched, arr_est
+    elif dep_sched and dep_est:
+        ref_sched, ref_est = dep_sched, dep_est
+
+    if not ref_sched or not ref_est:
+        return "unknown", None
+
+    delta = dt_util.as_utc(ref_est) - dt_util.as_utc(ref_sched)
+    minutes = int(round(delta.total_seconds() / 60))
+    if minutes > grace_minutes:
+        return "delayed", minutes
+    return "on_time", minutes
 
 
 def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minutes: int) -> int | None:
@@ -117,24 +151,48 @@ async def _fetch_status(hass: HomeAssistant, options: dict[str, Any], flight: di
 
     # Provider preference with fallbacks if missing key
     if provider == "flightradar24" and fr24_active_key:
+        if is_blocked(hass, "fr24"):
+            return None
         from .providers.status.flightradar24 import Flightradar24StatusProvider
 
         res = await Flightradar24StatusProvider(
             hass, api_key=fr24_active_key, use_sandbox=use_sandbox, api_version=fr24_version
         ).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "fr24", block_for, reason)
+            return None
+        return out
 
     if provider == "aviationstack" and av_key:
+        if is_blocked(hass, "aviationstack"):
+            return None
         from .providers.status.aviationstack import AviationstackStatusProvider
 
         res = await AviationstackStatusProvider(hass, av_key).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "aviationstack", block_for, reason)
+            return None
+        return out
 
     if provider == "airlabs" and al_key:
+        if is_blocked(hass, "airlabs"):
+            return None
         from .providers.status.airlabs import AirLabsStatusProvider
 
         res = await AirLabsStatusProvider(hass, al_key).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "airlabs", block_for, reason)
+            return None
+        return out
 
     if provider == "opensky" and (os_user or os_pass):
         # OpenSky can work without auth but is rate-limited; only use if configured
@@ -170,23 +228,47 @@ async def _fetch_status(hass: HomeAssistant, options: dict[str, Any], flight: di
 
     # Fallback: try any configured provider in priority order
     if fr24_key:
+        if is_blocked(hass, "fr24"):
+            return None
         from .providers.status.flightradar24 import Flightradar24StatusProvider
 
         use_sandbox = bool(options.get("fr24_use_sandbox", False))
         res = await Flightradar24StatusProvider(
             hass, api_key=fr24_key, use_sandbox=use_sandbox, api_version=fr24_version
         ).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "fr24", block_for, reason)
+            return None
+        return out
     if av_key:
+        if is_blocked(hass, "aviationstack"):
+            return None
         from .providers.status.aviationstack import AviationstackStatusProvider
 
         res = await AviationstackStatusProvider(hass, av_key).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "aviationstack", block_for, reason)
+            return None
+        return out
     if al_key:
+        if is_blocked(hass, "airlabs"):
+            return None
         from .providers.status.airlabs import AirLabsStatusProvider
 
         res = await AirLabsStatusProvider(hass, al_key).async_get_status(flight)
-        return _unwrap(res)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "airlabs", block_for, reason)
+            return None
+        return out
 
     return None
 
@@ -202,6 +284,7 @@ async def async_update_statuses(
     cache = _status_cache(hass)
     now = dt_util.utcnow()
     ttl_minutes = int(options.get("status_ttl_minutes", 5))
+    grace_minutes = int(options.get(CONF_DELAY_GRACE_MINUTES, 10))
 
     # Apply cached status to all flights first
     for f in flights:
@@ -216,6 +299,9 @@ async def async_update_statuses(
             f["status"] = status
             f["status_updated_at"] = cached.get("updated_at")
             apply_status(f, status)
+        delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
+        f["delay_status"] = delay_state
+        f["delay_minutes"] = delay_minutes
 
     # Determine which flights are due
     due: list[dict[str, Any]] = []
@@ -265,6 +351,10 @@ async def async_update_statuses(
                     updates["scheduled_arrival"] = (f.get("arr") or {}).get("scheduled") or status.get("arr_scheduled")
                 if updates:
                     await async_update_manual_flight(hass, key, updates)
+
+        delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
+        f["delay_status"] = delay_state
+        f["delay_minutes"] = delay_minutes
         # Compute next refresh time
         refresh_seconds = compute_next_refresh_seconds(f, now, ttl_minutes)
         if refresh_seconds is None:

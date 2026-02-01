@@ -1,64 +1,79 @@
-"""Local cache storage for airlines/airports."""
+"""Directory cache storage for airports and airlines."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
-from homeassistant.util import dt as dt_util
 
-DOMAIN = "flight_dashboard"
+from .const import STORAGE_KEY_DIRECTORY
 
-
-async def _load_store(hass: HomeAssistant, store_key: str) -> dict[str, Any]:
-    store = Store(hass, 1, store_key)
-    data = await store.async_load()
-    return data or {}
+_STORE_VERSION = 1
 
 
-async def _save_store(hass: HomeAssistant, store_key: str, data: dict[str, Any]) -> None:
-    store = Store(hass, 1, store_key)
-    await store.async_save(data)
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def _is_stale(entry: dict[str, Any], ttl_days: int) -> bool:
+def _parse_dt(val: str | None) -> datetime | None:
+    if not val:
+        return None
+    try:
+        return datetime.fromisoformat(val.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+async def _store(hass: HomeAssistant) -> Store:
+    return Store(hass, _STORE_VERSION, STORAGE_KEY_DIRECTORY)
+
+
+async def async_load_cache(hass: HomeAssistant) -> dict[str, Any]:
+    st = await _store(hass)
+    data = await st.async_load() or {}
+    if not isinstance(data, dict):
+        return {"airports": {}, "airlines": {}}
+    data.setdefault("airports", {})
+    data.setdefault("airlines", {})
+    return data
+
+
+async def async_save_cache(hass: HomeAssistant, cache: dict[str, Any]) -> None:
+    st = await _store(hass)
+    await st.async_save(cache)
+
+
+async def async_get_airport(hass: HomeAssistant, iata: str) -> dict[str, Any] | None:
+    cache = await async_load_cache(hass)
+    return cache.get("airports", {}).get(iata)
+
+
+async def async_get_airline(hass: HomeAssistant, iata: str) -> dict[str, Any] | None:
+    cache = await async_load_cache(hass)
+    return cache.get("airlines", {}).get(iata)
+
+
+async def async_set_airport(hass: HomeAssistant, iata: str, data: dict[str, Any]) -> None:
+    cache = await async_load_cache(hass)
+    airports = cache.setdefault("airports", {})
+    airports[iata] = {**data, "fetched_at": _utcnow_iso()}
+    await async_save_cache(hass, cache)
+
+
+async def async_set_airline(hass: HomeAssistant, iata: str, data: dict[str, Any]) -> None:
+    cache = await async_load_cache(hass)
+    airlines = cache.setdefault("airlines", {})
+    airlines[iata] = {**data, "fetched_at": _utcnow_iso()}
+    await async_save_cache(hass, cache)
+
+
+def is_fresh(entry: dict[str, Any] | None, ttl_days: int) -> bool:
+    if not entry:
+        return False
     fetched_at = entry.get("fetched_at")
-    if not isinstance(fetched_at, str):
-        return True
-    dt = dt_util.parse_datetime(fetched_at)
+    dt = _parse_dt(fetched_at) if isinstance(fetched_at, str) else None
     if not dt:
-        return True
-    return (dt_util.utcnow() - dt_util.as_utc(dt)) > timedelta(days=ttl_days)
-
-
-async def async_get_cached(
-    hass: HomeAssistant,
-    *,
-    store_key: str,
-    code: str,
-    ttl_days: int,
-) -> dict[str, Any] | None:
-    data = await _load_store(hass, store_key)
-    entry = data.get(code)
-    if not isinstance(entry, dict):
-        return None
-    if _is_stale(entry, ttl_days):
-        return None
-    payload = entry.get("data")
-    return payload if isinstance(payload, dict) else None
-
-
-async def async_set_cached(
-    hass: HomeAssistant,
-    *,
-    store_key: str,
-    code: str,
-    payload: dict[str, Any],
-) -> None:
-    data = await _load_store(hass, store_key)
-    data[code] = {
-        "fetched_at": dt_util.utcnow().isoformat(),
-        "data": payload,
-    }
-    await _save_store(hass, store_key, data)
+        return False
+    age = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+    return age.total_seconds() <= ttl_days * 86400

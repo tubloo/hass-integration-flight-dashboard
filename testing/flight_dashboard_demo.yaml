@@ -74,3 +74,11 @@ script:
               - service: flight_dashboard.remove_manual_flight
                 data:
                   flight_key: "{{ flight_key }}"
+
+  fd_prune_landed:
+    alias: "Flight Dashboard: Remove landed flights"
+    mode: single
+    sequence:
+      - service: flight_dashboard.prune_landed
+        data:
+          hours: 0

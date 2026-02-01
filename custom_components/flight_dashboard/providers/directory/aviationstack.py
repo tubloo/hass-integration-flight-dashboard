@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+import logging
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 
@@ -21,9 +22,13 @@ class AviationstackDirectoryProvider:
 
     async def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
         session = async_get_clientsession(self.hass)
-        async with session.get(url, params=params, timeout=25) as resp:
-            payload = await resp.json(content_type=None)
-        return payload if isinstance(payload, dict) else None
+        try:
+            async with session.get(url, params=params, timeout=25) as resp:
+                payload = await resp.json(content_type=None)
+            return payload if isinstance(payload, dict) else None
+        except Exception as e:
+            _LOGGER.debug("Aviationstack directory request failed: %s", e)
+            return None
 
     async def async_get_airport(self, iata: str) -> dict[str, Any] | None:
         base_urls = [
@@ -50,7 +55,7 @@ class AviationstackDirectoryProvider:
                     "name": name,
                     "city": city,
                     "country": country,
-                    "timezone": a.get("timezone"),
+                    "tz": a.get("timezone"),
                     "lat": a.get("latitude"),
                     "lon": a.get("longitude"),
                     "source": "aviationstack",
@@ -79,6 +84,8 @@ class AviationstackDirectoryProvider:
                     "name": _first(al.get("airline_name"), al.get("name")),
                     "country": _first(al.get("country_name"), al.get("country")),
                     "callsign": al.get("callsign"),
+                    "logo": al.get("logo") or al.get("logo_url"),
                     "source": "aviationstack",
                 }
         return None
+_LOGGER = logging.getLogger(__name__)

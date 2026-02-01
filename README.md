@@ -1,6 +1,112 @@
 # Flight Dashboard (Home Assistant)
 
 Flight Dashboard is a Home Assistant integration that tracks upcoming flights and their status.
+
+## Installation
+
+### HACS (recommended)
+1. Open **HACS → Integrations**.
+2. Click **Explore & Download Repositories** and search for **Flight Dashboard**.
+3. Download and restart Home Assistant.
+4. Go to **Settings → Devices & Services → Add Integration** and search **Flight Dashboard**.
+
+### Manual
+1. Copy `custom_components/flight_dashboard` into `/config/custom_components/flight_dashboard`.
+2. Restart Home Assistant.
+3. Add the integration in **Settings → Devices & Services**.
+
+## Setup Package (Helpers + Scripts)
+
+The easiest way to create the required helpers/scripts is to include the
+package file in your configuration and restart HA:
+
+1) Ensure `packages:` is enabled in `configuration.yaml`:
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+2) Copy the package file:
+```
+/config/packages/flight_dashboard_add_flow.yaml
+```
+
+3) Restart Home Assistant.
+
+This will create:
+- `input_text.fd_airline`
+- `input_text.fd_flight_number`
+- `input_text.fd_travellers`
+- `input_text.fd_notes`
+- `input_datetime.fd_flight_date`
+- `script.fd_preview_flight`
+- `script.fd_confirm_add`
+- `script.fd_clear_preview`
+
+### Manual Helper + Script Creation (UI)
+
+If you prefer the UI instead of packages:
+
+**Helpers**
+1. Settings → Devices & Services → Helpers → **Create Helper**
+2. Create these:
+   - **Text**: `input_text.fd_airline`
+   - **Text**: `input_text.fd_flight_number`
+   - **Text**: `input_text.fd_travellers`
+   - **Text**: `input_text.fd_notes`
+   - **Date & Time**: `input_datetime.fd_flight_date`
+
+**Scripts**
+1. Settings → Automations & Scenes → **Scripts** → Create Script
+2. Create:
+   - `script.fd_preview_flight`
+   - `script.fd_confirm_add`
+   - `script.fd_clear_preview`
+
+You can copy the script YAML directly from
+`/config/packages/flight_dashboard_add_flow.yaml` if you want exact parity.
+
+## Required / Recommended Frontend Components
+
+These Lovelace examples use the following custom cards:
+
+**Required for the examples below**
+- **Mushroom** cards (`custom:mushroom-*`)
+- **auto-entities** (`custom:auto-entities`)
+- **map-card** (`custom:map-card`)
+
+If you don’t have these, install them via HACS → Frontend, then restart HA.
+
+## Helpers & Scripts (Add Flight Flow)
+
+The Add Flight card expects these helpers/scripts to exist. Use the provided
+`/config/packages/flight_dashboard_add_flow.yaml` or create them in UI:
+
+- `input_text.fd_airline`
+- `input_text.fd_flight_number`
+- `input_text.fd_travellers`
+- `input_text.fd_notes`
+- `input_datetime.fd_flight_date`
+- `script.fd_preview_flight`
+- `script.fd_confirm_add`
+- `script.fd_clear_preview`
+
+## Post‑Install Checklist
+
+1) **Configure the integration**  
+   Settings → Devices & Services → Add Integration → Flight Dashboard  
+   Add API keys, choose providers, set cache/refresh options.
+
+2) **Install required frontend cards** (via HACS → Frontend)  
+   - Mushroom  
+   - auto‑entities  
+   - map-card
+
+3) **Create helpers + scripts**  
+   Use the **Setup Package** above or create them in UI.
+
+4) **Add Lovelace dashboards/cards**  
+   Copy the Flight Status and Manage Flights dashboards from the examples below.
 You can add flights with minimal inputs (airline code, flight number, date) and let the integration enrich the details using provider APIs.
 
 ## Features
@@ -11,6 +117,7 @@ You can add flights with minimal inputs (airline code, flight number, date) and 
 - On-demand refresh button/service.
 - Schedule provider and status provider can be set independently.
 - Optional auto-removal of landed/cancelled manual flights.
+- Optional airport/airline directory cache (default 180 days).
 
 ## Installation (Manual)
 1. Copy `custom_components/flight_dashboard` into your Home Assistant `config/custom_components/` directory.
@@ -26,11 +133,29 @@ Key points:
 - FR24 is great for status, but does not always return scheduled times. Use AirLabs or Aviationstack for schedule.
 - FR24 sandbox: enable **Use FR24 sandbox** and set the sandbox key.
 - **Auto-remove landed flights** is optional and applies only to manual flights.
+- **Delay grace (minutes)** controls when a flight is considered delayed (default 10 min).
 
 ### Required inputs when adding a flight
 ```
 airline, flight_number, date
 ```
+
+### Delay Status Logic
+Computed field: `delay_status` (on_time | delayed | cancelled | arrived | unknown)  
+Computed field: `delay_minutes` (minutes vs sched; arrival preferred if available)
+
+Logic:
+- If status_state == cancelled → `cancelled`
+- If status_state == landed → `arrived`
+- If arrival estimated/actual is available:
+  - arrival_delay = arrival_est_or_act − arrival_scheduled
+  - delayed if arrival_delay > grace
+  - otherwise on_time
+- Else if departure estimated/actual is available:
+  - departure_delay = dep_est_or_act − dep_scheduled
+  - delayed if departure_delay > grace
+  - otherwise on_time
+- If no sched/est/act → `unknown`
 
 ### Supported providers
 **Schedule provider**
@@ -48,233 +173,470 @@ airline, flight_number, date
 - Local (no API calls)
 - Mock
 
+## Directory Cache
+- Enable **Cache airports/airlines** to store directory lookups in `.storage`.
+- **Directory cache TTL (days)** controls refresh age (default 180).
+- Cache is only used when a field is missing (name, city, tz, airline name/logo).
+
 ## Lovelace Examples
 
-### Basic sensor card
+Below are **full dashboard YAMLs** and **individual card** snippets.
+
+### Flight Status Dashboard (full)
 ```yaml
-type: entities
-title: Flight Dashboard
-entities:
-  - entity: sensor.flight_dashboard_upcoming_flights
-    name: Upcoming Flights
-```
-
-### Add Flight Card (with Preview)
-```yaml
-type: vertical-stack
-cards:
-  - type: custom:mushroom-title-card
-    title: Add a flight
-    subtitle: Enter flight + date, preview, then confirm
-
-  - type: entities
-    show_header_toggle: false
-    entities:
-      - entity: input_text.fd_flight_query
-        name: Flight (e.g. AI 157)
-      - entity: input_datetime.fd_flight_date
-        name: Date
-      - entity: input_text.fd_travellers
-        name: Travellers (optional)
-      - entity: input_text.fd_notes
-        name: Notes (optional)
-      - entity: sensor.flight_dashboard_add_preview
-        name: Preview status
-
-  - type: custom:mushroom-template-card
-    primary: >
-      {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') %}
-      {% if p and p.flight %}
-      {{ p.flight.airline_code }} {{ p.flight.flight_number }} ·
-      {{ p.flight.dep.airport.iata or '—' }} → {{ p.flight.arr.airport.iata or '—' }}
-      {% else %} No preview {% endif %}
-    secondary: >
-      {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') %}
-      {% if p and p.flight %}
-      Dep {{ p.flight.dep.scheduled or p.flight.dep.estimated or '—' }} ·
-      Arr {{ p.flight.arr.scheduled or p.flight.arr.estimated or '—' }}
-      {% else %} Run Preview {% endif %}
-    picture: >
-      {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') %}
-      {% if p and p.flight %}
-      {{ p.flight.airline_logo_url }}
-      {% endif %}
-    icon: mdi:airplane
-    layout: horizontal
-    multiline_secondary: false
-
-  - type: horizontal-stack
+title: Flight Status
+views:
+  - title: Flights
+    path: flights
     cards:
-      - type: custom:mushroom-entity-card
-        entity: script.fd_preview_flight
-        name: Preview
-        icon: mdi:magnify
-        tap_action:
-          action: call-service
-          service: script.turn_on
-          target:
-            entity_id: script.fd_preview_flight
+      - type: custom:auto-entities
+        card:
+          type: entities
+          title: Flights
+          show_header_toggle: false
+        filter:
+          template: >
+            {% set flights = state_attr('sensor.flight_dashboard_upcoming_flights','flights') or [] %} [
+            {%- for f in flights -%}
 
-      - type: custom:mushroom-entity-card
-        entity: script.fd_confirm_add
-        name: Add
-        icon: mdi:content-save
-        tap_action:
-          action: call-service
-          service: script.turn_on
-          target:
-            entity_id: script.fd_confirm_add
+              {
 
-      - type: custom:mushroom-entity-card
-        entity: script.fd_clear_preview
-        name: Clear
-        icon: mdi:close-circle
-        tap_action:
-          action: call-service
-          service: script.turn_on
-          target:
-            entity_id: script.fd_clear_preview
-```
+                "{%- set dep_date = f.dep.scheduled and (as_timestamp(f.dep.scheduled) | timestamp_custom('%d %b', true)) or '—' -%}"
 
-### Remove Flight Card
+                "{%- set dep_sched_local_dt = f.dep.scheduled_local and as_datetime(f.dep.scheduled_local) -%}"
+                "{%- set dep_est_local_dt = f.dep.estimated_local and as_datetime(f.dep.estimated_local) -%}"
+                "{%- set dep_act_local_dt = f.dep.actual_local and as_datetime(f.dep.actual_local) -%}"
+
+                "{%- set arr_sched_local_dt = f.arr.scheduled_local and as_datetime(f.arr.scheduled_local) -%}"
+                "{%- set arr_est_local_dt = f.arr.estimated_local and as_datetime(f.arr.estimated_local) -%}"
+                "{%- set arr_act_local_dt = f.arr.actual_local and as_datetime(f.arr.actual_local) -%}"
+
+                "{%- set dep_sched_local = dep_sched_local_dt and (dep_sched_local_dt.strftime('%H:%M')) -%}"
+                "{%- set dep_est_local = dep_est_local_dt and (dep_est_local_dt.strftime('%H:%M')) -%}"
+                "{%- set dep_act_local = dep_act_local_dt and (dep_act_local_dt.strftime('%H:%M')) -%}"
+
+                "{%- set arr_sched_local = arr_sched_local_dt and (arr_sched_local_dt.strftime('%H:%M')) -%}"
+                "{%- set arr_est_local = arr_est_local_dt and (arr_est_local_dt.strftime('%H:%M')) -%}"
+                "{%- set arr_act_local = arr_act_local_dt and (arr_act_local_dt.strftime('%H:%M')) -%}"
+
+                "{%- set dep_sched_viewer_dt = f.dep.scheduled and (as_datetime(f.dep.scheduled) | as_local) -%}"
+                "{%- set dep_est_viewer_dt = f.dep.estimated and (as_datetime(f.dep.estimated) | as_local) -%}"
+                "{%- set dep_act_viewer_dt = f.dep.actual and (as_datetime(f.dep.actual) | as_local) -%}"
+
+                "{%- set arr_sched_viewer_dt = f.arr.scheduled and (as_datetime(f.arr.scheduled) | as_local) -%}"
+                "{%- set arr_est_viewer_dt = f.arr.estimated and (as_datetime(f.arr.estimated) | as_local) -%}"
+                "{%- set arr_act_viewer_dt = f.arr.actual and (as_datetime(f.arr.actual) | as_local) -%}"
+
+                "{%- set dep_sched_viewer = dep_sched_viewer_dt and (dep_sched_viewer_dt.strftime('%H:%M')) -%}"
+                "{%- set dep_est_viewer = dep_est_viewer_dt and (dep_est_viewer_dt.strftime('%H:%M')) -%}"
+                "{%- set dep_act_viewer = dep_act_viewer_dt and (dep_act_viewer_dt.strftime('%H:%M')) -%}"
+
+                "{%- set arr_sched_viewer = arr_sched_viewer_dt and (arr_sched_viewer_dt.strftime('%H:%M')) -%}"
+                "{%- set arr_est_viewer = arr_est_viewer_dt and (arr_est_viewer_dt.strftime('%H:%M')) -%}"
+                "{%- set arr_act_viewer = arr_act_viewer_dt and (arr_act_viewer_dt.strftime('%H:%M')) -%}"
+
+                "{%- set dep_sched_local_date = dep_sched_local_dt and dep_sched_local_dt.strftime('%d %b') -%}"
+                "{%- set dep_est_local_date = dep_est_local_dt and dep_est_local_dt.strftime('%d %b') -%}"
+                "{%- set dep_act_local_date = dep_act_local_dt and dep_act_local_dt.strftime('%d %b') -%}"
+
+                "{%- set arr_sched_local_date = arr_sched_local_dt and arr_sched_local_dt.strftime('%d %b') -%}"
+                "{%- set arr_est_local_date = arr_est_local_dt and arr_est_local_dt.strftime('%d %b') -%}"
+                "{%- set arr_act_local_date = arr_act_local_dt and arr_act_local_dt.strftime('%d %b') -%}"
+
+                "{%- set dep_sched_viewer_date = dep_sched_viewer_dt and dep_sched_viewer_dt.strftime('%d %b') -%}"
+                "{%- set dep_est_viewer_date = dep_est_viewer_dt and dep_est_viewer_dt.strftime('%d %b') -%}"
+                "{%- set dep_act_viewer_date = dep_act_viewer_dt and dep_act_viewer_dt.strftime('%d %b') -%}"
+
+                "{%- set arr_sched_viewer_date = arr_sched_viewer_dt and arr_sched_viewer_dt.strftime('%d %b') -%}"
+                "{%- set arr_est_viewer_date = arr_est_viewer_dt and arr_est_viewer_dt.strftime('%d %b') -%}"
+                "{%- set arr_act_viewer_date = arr_act_viewer_dt and arr_act_viewer_dt.strftime('%d %b') -%}"
+
+                "{%- set dep_base_local_dt = dep_act_local_dt or dep_est_local_dt or dep_sched_local_dt -%}"
+                "{%- set dep_base_local_date = dep_base_local_dt and dep_base_local_dt.strftime('%d %b') -%}"
+
+                "{%- set dep_tz_short = f.dep.airport.tz_short -%}"
+                "{%- set arr_tz_short = f.arr.airport.tz_short -%}"
+                "{%- set viewer_tz_short = now().strftime('%Z') -%}"
+
+                "{%- set dep_label = f.dep.airport.iata -%}"
+                "{%- set arr_label = f.arr.airport.iata -%}"
+
+                "type": "custom:mushroom-template-card",
+                "entity": "sensor.flight_dashboard_upcoming_flights",
+                "picture": "{{ f.airline_logo_url }}",
+                "primary": "{{ f.airline_code }} {{ f.flight_number }} · {{ dep_label }} → {{ arr_label }} · {{ dep_date }} · {{ (f.get('delay_status') or \"unknown\") | title }} · ({{ (f.status_state or \"unknown\") | title }})",
+                "state": "{{ (f.status_state or 'unknown') | title }}",
+                "secondary":
+
+                  "Dep: "
+                  "{%- if dep_sched_local -%} S: {{ dep_sched_local }} {{ dep_tz_short }} {%- endif -%}"
+                  "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_sched_viewer -%}"
+                    " · {{ dep_sched_viewer }} {{ viewer_tz_short }}{% if dep_sched_viewer_date and dep_sched_local_date and dep_sched_viewer_date != dep_sched_local_date %} ({{ dep_sched_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+                  "{%- if dep_est_local -%}, E: {{ dep_est_local }} {{ dep_tz_short }} {%- endif -%}"
+                  "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_est_viewer -%}"
+                    " · {{ dep_est_viewer }} {{ viewer_tz_short }}{% if dep_est_viewer_date and dep_est_local_date and dep_est_viewer_date != dep_est_local_date %} ({{ dep_est_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+                  "{%- if dep_act_local -%}, A: {{ dep_act_local }} {{ dep_tz_short }} {%- endif -%}"
+                  "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_act_viewer -%}"
+                    " · {{ dep_act_viewer }} {{ viewer_tz_short }}{% if dep_act_viewer_date and dep_act_local_date and dep_act_viewer_date != dep_act_local_date %} ({{ dep_act_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+
+                  "\nArr: "
+                  "{%- if arr_sched_local -%} S: {{ arr_sched_local }} {{ arr_tz_short }}{% if arr_sched_local_date and dep_base_local_date and arr_sched_local_date != dep_base_local_date %} ({{ arr_sched_local_date }}){% endif %}{%- endif -%}"
+                  "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_sched_viewer -%}"
+                    " · {{ arr_sched_viewer }} {{ viewer_tz_short }}{% if arr_sched_viewer_date and arr_sched_local_date and arr_sched_viewer_date != arr_sched_local_date %} ({{ arr_sched_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+                  "{%- if arr_est_local -%}, E: {{ arr_est_local }} {{ arr_tz_short }}{% if arr_est_local_date and dep_base_local_date and arr_est_local_date != dep_base_local_date %} ({{ arr_est_local_date }}){% endif %}{%- endif -%}"
+                  "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_est_viewer -%}"
+                    " · {{ arr_est_viewer }} {{ viewer_tz_short }}{% if arr_est_viewer_date and arr_est_local_date and arr_est_viewer_date != arr_est_local_date %} ({{ arr_est_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+                  "{%- if arr_act_local -%}, A: {{ arr_act_local }} {{ arr_tz_short }}{% if arr_act_local_date and dep_base_local_date and arr_act_local_date != dep_base_local_date %} ({{ arr_act_local_date }}){% endif %}{%- endif -%}"
+                  "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_act_viewer -%}"
+                    " · {{ arr_act_viewer }} {{ viewer_tz_short }}{% if arr_act_viewer_date and arr_act_local_date and arr_act_viewer_date != arr_act_local_date %} ({{ arr_act_viewer_date }}){% endif %}"
+                  "{%- endif -%}"
+
+                  "{%- if f.aircraft_type -%}"
+                  "\nAircraft: {{ f.aircraft_type }}"
+                  "{%- endif -%}"
+
+                  "{%- if f.dep.terminal or f.dep.gate or f.arr.terminal or f.arr.gate -%}"
+                  "\nT/G: {{ f.dep.airport.iata }} T.{{ f.dep.terminal or '—' }}{% if f.dep.gate %} G.{{ f.dep.gate }}{% endif %}"
+                  " → {{ f.arr.airport.iata }} T.{{ f.arr.terminal or '—' }}{% if f.arr.gate %} G.{{ f.arr.gate }}{% endif %}"
+                  "{%- endif -%}"
+
+                  "{%- if f.travellers -%}"
+                  "\nPax: {{ f.travellers | join(', ') }}"
+                  "{%- endif -%}" ,
+
+                "multiline_secondary": "true",
+                "tap_action": {
+                  "action": "call-service",
+                  "service": "select.select_option",
+                  "target": { "entity_id": "select.flight_dashboard_selected_flight" },
+                  "data": { "option": "{{ f.flight_key }} | {{ f.airline_code }} {{ f.flight_number }} {{ f.dep.airport.iata }}→{{ f.arr.airport.iata }} {{ f.dep.scheduled }}" }
+                }
+              }{{ "," if not loop.last else "" }}
+            {%- endfor -%} ]
+
+      - type: vertical-stack
+        cards:
+          - type: custom:mushroom-template-card
+            entity: sensor.flight_dashboard_selected_flight
+            picture: >-
+              {{ (state_attr('sensor.flight_dashboard_selected_flight','flight') or {}).get('airline_logo_url') }}
+            primary: >
+              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+              {{ f.get('airline_code','—') }} {{ f.get('flight_number','—') }} ·
+              {% set dep = f.get('dep') or {} %}
+              {{ dep.get('scheduled') and (as_timestamp(dep.get('scheduled')) | timestamp_custom('%d %b', true)) or '—' }} ·
+              {{ (f.get('delay_status') or "unknown") | title }} ·
+              {{ (f.get('status_state') or 'unknown') | title }}
+            secondary: >
+              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+              {% set dep = f.get('dep') or {} %}
+              {% set arr = f.get('arr') or {} %}
+              {% set dep_air = dep.get('airport') or {} %}
+              {% set arr_air = arr.get('airport') or {} %}
+              {{ f.get('airline_name','') }} ·
+              {{ dep_air.get('city') or dep_air.get('name') or dep_air.get('iata') or '—' }} →
+              {{ arr_air.get('city') or arr_air.get('name') or arr_air.get('iata') or '—' }} ·
+              {{ f.get('aircraft_type','') }} ·
+              {{ (f.get('travellers') | join(', ')) if f.get('travellers') else '—' }}
+            multiline_secondary: true
+
+          - type: markdown
+            content: >
+              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+              {% set dep = f.get('dep') or {} %}
+              {% set arr = f.get('arr') or {} %}
+              {% set dep_iata = (dep.get('airport') or {}).get('iata','—') %}
+              {% set arr_iata = (arr.get('airport') or {}).get('iata','—') %}
+              {% set dep_time = dep.get('actual') or dep.get('estimated') or dep.get('scheduled') %}
+              {% set arr_time = arr.get('actual') or arr.get('estimated') or arr.get('scheduled') %}
+              {% set dep_dt = dep_time and as_datetime(dep_time) %}
+              {% set arr_dt = arr_time and as_datetime(arr_time) %}
+              {% set pos = f.get('position') or {} %}
+              {% set pos_ts = pos.get('timestamp') %}
+              {% set now_dt = pos_ts and as_datetime(pos_ts) or now() %}
+              {% set total = (arr_dt and dep_dt) and (as_timestamp(arr_dt) - as_timestamp(dep_dt)) %}
+              {% set elapsed = (arr_dt and dep_dt) and (as_timestamp(now_dt) - as_timestamp(dep_dt)) %}
+              {% set pct = (total and elapsed) and (elapsed / total * 100) or 0 %}
+              {% if pct < 0 %}{% set pct = 0 %}{% endif %} {% if pct > 100 %}{% set pct = 100 %}{% endif %}
+              {% set blocks = 14 %} {% set filled = (pct / 100 * blocks) | round(0) %}
+              {% set left = '█' * filled %} {% set right = '░' * (blocks - filled) %}
+              <table style="width:100%; border-collapse:collapse;">
+                <tr>
+                  <td style="font-size:28px; font-weight:700; text-align:left;">{{ dep_iata }}</td>
+                  <td style="text-align:center; font-size:16px; letter-spacing:1px;">
+                    {{ left }} ✈ {{ right }}
+                  </td>
+                  <td style="font-size:28px; font-weight:700; text-align:right;">{{ arr_iata }}</td>
+                </tr>
+              </table>
+
+          - type: grid
+            square: false
+            columns: 2
+            cards:
+              - type: markdown
+                content: >
+                  {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+                  {% set dep = f.get('dep') or {} %}
+                  {% set dep_air = dep.get('airport') or {} %}
+                  {% set dep_sched_local_dt = dep.get('scheduled_local') and as_datetime(dep.get('scheduled_local')) %}
+                  {% set dep_est_local_dt = dep.get('estimated_local') and as_datetime(dep.get('estimated_local')) %}
+                  {% set dep_act_local_dt = dep.get('actual_local') and as_datetime(dep.get('actual_local')) %}
+                  {% set dep_est_or_act_local_dt = dep_act_local_dt or dep_est_local_dt %}
+                  {% set dep_sched_local_date = dep_sched_local_dt and dep_sched_local_dt.strftime('%d %b') %}
+                  {% set dep_est_or_act_local_date = dep_est_or_act_local_dt and dep_est_or_act_local_dt.strftime('%d %b') %}
+                  **Dep ({{ dep_air.get('tz_short','—') }}):**
+                  **Sched:** {{ dep_sched_local_dt and dep_sched_local_dt.strftime('%H:%M') or '—' }}
+                  **Est/Act:** {{ dep_est_or_act_local_dt and dep_est_or_act_local_dt.strftime('%H:%M') or '—' }}
+                  {% if dep_est_or_act_local_date and dep_sched_local_date and dep_est_or_act_local_date != dep_sched_local_date %} ({{ dep_est_or_act_local_date }}){% endif %}
+              - type: markdown
+                content: >
+                  {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+                  {% set arr = f.get('arr') or {} %}
+                  {% set arr_air = arr.get('airport') or {} %}
+                  {% set arr_sched_local_dt = arr.get('scheduled_local') and as_datetime(arr.get('scheduled_local')) %}
+                  {% set arr_est_local_dt = arr.get('estimated_local') and as_datetime(arr.get('estimated_local')) %}
+                  {% set arr_act_local_dt = arr.get('actual_local') and as_datetime(arr.get('actual_local')) %}
+                  {% set arr_est_or_act_local_dt = arr_act_local_dt or arr_est_local_dt %}
+                  {% set dep = f.get('dep') or {} %}
+                  {% set dep_sched_local_dt = dep.get('scheduled_local') and as_datetime(dep.get('scheduled_local')) %}
+                  {% set dep_est_local_dt = dep.get('estimated_local') and as_datetime(dep.get('estimated_local')) %}
+                  {% set dep_act_local_dt = dep.get('actual_local') and as_datetime(dep.get('actual_local')) %}
+                  {% set dep_base_local_dt = dep_act_local_dt or dep_est_local_dt or dep_sched_local_dt %}
+                  {% set dep_base_local_date = dep_base_local_dt and dep_base_local_dt.strftime('%d %b') %}
+                  {% set arr_sched_local_date = arr_sched_local_dt and arr_sched_local_dt.strftime('%d %b') %}
+                  **Arr ({{ arr_air.get('tz_short','—') }}):**
+                  **Sched:** {{ arr_sched_local_dt and arr_sched_local_dt.strftime('%H:%M') or '—' }}
+                  {% if arr_sched_local_date and dep_base_local_date and arr_sched_local_date != dep_base_local_date %} ({{ arr_sched_local_date }}){% endif %}
+                  **Est/Act:** {{ arr_est_or_act_local_dt and arr_est_or_act_local_dt.strftime('%H:%M') or '—' }}
+                  {% if arr_est_or_act_local_dt and dep_base_local_date and (arr_est_or_act_local_dt.strftime('%d %b') != dep_base_local_date) %} ({{ arr_est_or_act_local_dt.strftime('%d %b') }}){% endif %}
+              - type: markdown
+                content: >
+                  {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+                  {% set dep = f.get('dep') or {} %}
+                  {% set dep_sched_viewer_dt = dep.get('scheduled') and (as_datetime(dep.get('scheduled')) | as_local) %}
+                  {% set dep_est_viewer_dt = dep.get('estimated') and (as_datetime(dep.get('estimated')) | as_local) %}
+                  {% set dep_act_viewer_dt = dep.get('actual') and (as_datetime(dep.get('actual')) | as_local) %}
+                  {% set dep_est_or_act_viewer_dt = dep_act_viewer_dt or dep_est_viewer_dt %}
+                  {% set dep_sched_local_dt = dep.get('scheduled_local') and as_datetime(dep.get('scheduled_local')) %}
+                  {% set dep_sched_local_date = dep_sched_local_dt and dep_sched_local_dt.strftime('%d %b') %}
+                  {% set viewer_tz = now().strftime('%Z') %}
+                  **Viewer ({{ viewer_tz }}):**
+                  **Sched:** {{ dep_sched_viewer_dt and dep_sched_viewer_dt.strftime('%H:%M') or '—' }}
+                  {% if dep_sched_viewer_dt and dep_sched_local_date and (dep_sched_viewer_dt.strftime('%d %b') != dep_sched_local_date) %} ({{ dep_sched_viewer_dt.strftime('%d %b') }}){% endif %}
+                  **Est/Act:** {{ dep_est_or_act_viewer_dt and dep_est_or_act_viewer_dt.strftime('%H:%M') or '—' }}
+              - type: markdown
+                content: >
+                  {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
+                  {% set arr = f.get('arr') or {} %}
+                  {% set arr_sched_viewer_dt = arr.get('scheduled') and (as_datetime(arr.get('scheduled')) | as_local) %}
+                  {% set arr_est_viewer_dt = arr.get('estimated') and (as_datetime(arr.get('estimated')) | as_local) %}
+                  {% set arr_act_viewer_dt = arr.get('actual') and (as_datetime(arr.get('actual')) | as_local) %}
+                  {% set arr_est_or_act_viewer_dt = arr_act_viewer_dt or arr_est_viewer_dt %}
+                  {% set arr_sched_local_dt = arr.get('scheduled_local') and as_datetime(arr.get('scheduled_local')) %}
+                  {% set arr_sched_local_date = arr_sched_local_dt and arr_sched_local_dt.strftime('%d %b') %}
+                  {% set viewer_tz = now().strftime('%Z') %}
+                  **Viewer ({{ viewer_tz }}):**
+                  **Sched:** {{ arr_sched_viewer_dt and arr_sched_viewer_dt.strftime('%H:%M') or '—' }}
+                  {% if arr_sched_viewer_dt and arr_sched_local_date and (arr_sched_viewer_dt.strftime('%d %b') != arr_sched_local_date) %} ({{ arr_sched_viewer_dt.strftime('%d %b') }}){% endif %}
+                  **Est/Act:** {{ arr_est_or_act_viewer_dt and arr_est_or_act_viewer_dt.strftime('%H:%M') or '—' }}
+
+          - type: vertical-stack
+            cards:
+              - type: conditional
+                conditions:
+                  - condition: state
+                    entity: binary_sensor.flight_dashboard_selected_has_position
+                    state: "off"
+                card:
+                  type: markdown
+                  content: >
+                    **Live map unavailable**  
+                    No live position is available for this flight yet.
+              - type: conditional
+                conditions:
+                  - condition: state
+                    entity: binary_sensor.flight_dashboard_selected_has_position
+                    state: "on"
+                card:
+                  type: custom:map-card
+                  title: Live Flight Map
+                  auto_fit: true
+                  auto_fit_padding: 0.1
+                  zoom: 5
+                  focus_entity: sensor.flight_dashboard_selected_flight
+                  entities:
+                    - entity: sensor.flight_dashboard_selected_flight
+                      latitude: latitude
+                      longitude: longitude
+                      label: Aircraft
+                      icon: mdi:airplane
+                      size: 40
+                      rotate: "{{ state_attr('sensor.flight_dashboard_selected_flight','heading') | int(0) }}"
+
+### Manage Flights Dashboard (full)
 ```yaml
-type: entities
-title: Remove a flight
-show_header_toggle: false
+title: Manage Flights
+views:
+  - title: Manage
+    path: manage
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: custom:mushroom-title-card
+            title: Add a flight
+            subtitle: Enter airline + number, preview, then confirm
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_text.fd_airline
+                name: Airline code (e.g. EK)
+              - entity: input_text.fd_flight_number
+                name: Flight number (e.g. 236)
+              - entity: input_datetime.fd_flight_date
+                name: Date
+              - entity: input_text.fd_travellers
+                name: Travellers (optional)
+              - entity: input_text.fd_notes
+                name: Notes (optional)
+          - type: custom:mushroom-template-card
+            primary: >
+              {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') or {} %}
+              {% set f = p.get('flight') or {} %}
+              {% set dep = f.get('dep') or {} %}
+              {% set arr = f.get('arr') or {} %}
+              {% if f and dep and arr %}
+                {% set dep_t = dep.get('estimated') or dep.get('scheduled') %}
+                {% set arr_t = arr.get('estimated') or arr.get('scheduled') %}
+                {% set dep_hm = dep_t and (as_datetime(dep_t).strftime('%H:%M')) %}
+                {% set arr_hm = arr_t and (as_datetime(arr_t).strftime('%H:%M')) %}
+                {{ f.get('airline_code','—') }} {{ f.get('flight_number','—') }} ·
+                {{ (dep.get('airport') or {}).get('iata') or '—' }} ({{ dep_hm or '—' }})
+                → {{ (arr.get('airport') or {}).get('iata') or '—' }} ({{ arr_hm or '—' }})
+              {% else %}
+                No preview
+              {% endif %}
+            secondary: >
+              {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') or {} %}
+              {% if p.get('hint') %}
+                ❗ {{ p.get('hint') }}
+              {% elif p.get('warning') %}
+                ⚠️ {{ p.get('warning') }}
+              {% elif p.get('error') %}
+                ❌ {{ p.get('error') }}
+              {% else %}
+                Run Preview
+              {% endif %} Ready to add: {{ p.get('ready') }}
+            picture: >
+              {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') or {} %}
+              {% set f = p.get('flight') or {} %}
+              {% if f %}{{ f.get('airline_logo_url') }}{% endif %}
+            icon: mdi:airplane
+            layout: horizontal
+            multiline_secondary: true
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: script.fd_preview_flight
+                name: Preview
+                icon: mdi:magnify
+                tap_action:
+                  action: call-service
+                  service: script.turn_on
+                  target:
+                    entity_id: script.fd_preview_flight
+              - type: custom:mushroom-entity-card
+                entity: script.fd_confirm_add
+                name: Add
+                icon: mdi:content-save
+                tap_action:
+                  action: call-service
+                  service: script.turn_on
+                  target:
+                    entity_id: script.fd_confirm_add
+              - type: custom:mushroom-entity-card
+                entity: script.fd_clear_preview
+                name: Clear
+                icon: mdi:close-circle
+                tap_action:
+                  action: call-service
+                  service: script.turn_on
+                  target:
+                    entity_id: script.fd_clear_preview
+
+      - type: entities
+        title: Remove a flight
+        show_header_toggle: false
+        entities:
+          - entity: select.flight_dashboard_remove_flight
+            name: Select flight to remove
+          - entity: button.flight_dashboard_remove_selected_flight
+            name: Remove selected flight
+
+      - type: vertical-stack
+        cards:
+          - type: entities
+            title: Flight Dashboard Diagnostics
+            show_header_toggle: false
+            entities:
+              - entity: sensor.flight_dashboard_fr24_usage
+                name: FR24 usage (credits in last period)
+              - entity: sensor.flight_dashboard_upcoming_flights
+                name: Upcoming flights (summary)
+              - entity: sensor.flight_dashboard_provider_blocks
+                name: Provider blocks
+              - entity: button.flight_dashboard_refresh_now
+                name: Refresh now
+              - entity: button.flight_dashboard_remove_landed_flights
+                name: Remove landed flights
+          - type: markdown
+            title: Provider Blocks Detail
+            content: >
+              {% set p = state_attr('sensor.flight_dashboard_provider_blocks','providers') or {} %}
+              {% if p %}
+              {% for name, info in p.items() %}
+              {% set until_dt = info.until and as_datetime(info.until) %}
+              - **{{ name }}** blocked until
+                {{ until_dt and (as_timestamp(until_dt) | timestamp_custom('%d %b %H:%M', true)) or info.until }}
+                ({{ info.seconds_remaining }}s) · {{ info.reason }}
+              {% endfor %}
+              {% else %}
+              No providers blocked ✅
+              {% endif %}
+
+### Individual Cards
+
+#### Add Flight (preview + confirm)
+Use the **Add Flight** card from the Manage Flights dashboard above.
+
+#### Flight Status List
+Use the **Flight Status list** card from the Flight Status dashboard above.
+
+#### Detailed Flight View (selected flight + map)
+Use the **Selected Flight** stack from the Flight Status dashboard above.
+
+#### Diagnostics
+Use the **Diagnostics** stack from the Manage Flights dashboard above.
+
+### Map auto-recenter on selected flight
+```yaml
+type: custom:map-card
+title: Live Flight Map
+zoom: 5
+focus_entity: sensor.flight_dashboard_selected_flight
 entities:
-  - entity: select.flight_dashboard_remove_flight
-    name: Select flight to remove
-  - entity: button.flight_dashboard_remove_selected_flight
-    name: Remove selected flight
-```
-
-### Refresh Now Card
-```yaml
-type: entities
-title: Flight Dashboard
-show_header_toggle: false
-entities:
-  - entity: button.flight_dashboard_refresh_now
-    name: Refresh now
-```
-
-### Remove Landed Flights Card (manual)
-```yaml
-type: entities
-title: Flight Dashboard
-show_header_toggle: false
-entities:
-  - entity: button.flight_dashboard_remove_landed
-    name: Remove landed flights
-```
-
-### Flight Status List Card (example)
-```yaml
-type: custom:auto-entities
-card:
-  type: entities
-  title: Flights
-  show_header_toggle: false
-filter:
-  template: >
-    {% set flights =
-    state_attr('sensor.flight_dashboard_upcoming_flights','flights') or [] %} [
-    {%- for f in flights -%}
-
-      {
-
-        "{%- set dep_date = f.dep.scheduled and (as_timestamp(f.dep.scheduled) | timestamp_custom('%d %b', true)) or '—' -%}"
-        
-        "{%- set dep_sched_dt = f.dep.scheduled and as_datetime(f.dep.scheduled) -%}"
-        "{%- set dep_sched = dep_sched_dt and (as_timestamp(dep_sched_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set dep_sched_viewer = dep_sched_dt and (as_timestamp(dep_sched_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-        "{%- set dep_est_dt = f.dep.estimated and as_datetime(f.dep.estimated) -%}"
-        "{%- set dep_est = dep_est_dt and (as_timestamp(dep_est_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set dep_est_viewer = dep_est_dt and (as_timestamp(dep_est_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-        "{%- set dep_act_dt = f.dep.actual and as_datetime(f.dep.actual) -%}"
-        "{%- set dep_act = dep_act_dt and (as_timestamp(dep_act_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set dep_act_viewer = dep_act_dt and (as_timestamp(dep_act_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-
-        "{%- set arr_sched_dt = f.arr.scheduled and as_datetime(f.arr.scheduled) -%}"
-        "{%- set arr_sched = arr_sched_dt and (as_timestamp(arr_sched_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set arr_sched_viewer = arr_sched_dt and (as_timestamp(arr_sched_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-        "{%- set arr_est_dt = f.arr.estimated and as_datetime(f.arr.estimated) -%}"
-        "{%- set arr_est = arr_est_dt and (as_timestamp(arr_est_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set arr_est_viewer = arr_est_dt and (as_timestamp(arr_est_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-        "{%- set arr_act_dt = f.arr.actual and as_datetime(f.arr.actual) -%}"
-        "{%- set arr_act = arr_act_dt and (as_timestamp(arr_act_dt) | timestamp_custom('%H:%M', false)) -%}"
-        "{%- set arr_act_viewer = arr_act_dt and (as_timestamp(arr_act_dt | as_local) | timestamp_custom('%H:%M', false)) -%}"
-
-
-        "{%- set dep_tz_short = f.dep.airport.tz_short -%}"
-        "{%- set arr_tz_short = f.arr.airport.tz_short -%}"
-        "{%- set viewer_tz_short = now().strftime('%Z') -%}"
-
-        "{%- set dep_label = f.dep.airport.city or f.dep.airport.name or f.dep.airport.iata -%}"
-        "{%- set arr_label = f.arr.airport.city or f.arr.airport.name or f.arr.airport.iata -%}"
-
-        
-        "type": "custom:mushroom-template-card",
-        "entity": "sensor.flight_dashboard_upcoming_flights",
-        "picture": "{{ f.airline_logo_url }}",
-        "primary": "{{ f.airline_code }} {{ f.flight_number }} · {{ dep_label }} → {{ arr_label }} · {{ dep_date }} · ({{ (f.status_state or \"unknown\") | title }})",
-        "state": "{{ (f.status_state or 'unknown') | title }}",
-        "secondary":
-
-          "Dep: "
-          "{%- if dep_sched -%} S: {{ dep_sched }} {{ dep_tz_short }} {%- endif -%}"          
-          "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_sched -%}"
-            " · {{ dep_sched_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-          "{%- if dep_est -%}, E: {{ dep_est }} {{ dep_tz_short }} {%- endif -%}"           
-          "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_sched -%}"
-            " · {{ dep_est_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-          "{%- if dep_act -%}, A: {{ dep_act }} {{ dep_tz_short }} {%- endif -%}"         
-          "{%- if dep_tz_short and dep_tz_short != viewer_tz_short and dep_sched -%}"
-            " · {{ dep_act_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-
-          "\nArr: "
-          "{%- if arr_sched -%} S: {{ arr_sched }} {{ arr_tz_short }} {%- endif -%}"          
-          "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_sched -%}"
-            " · {{ arr_sched_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-
-          "{%- if arr_est -%}, E: {{ arr_est }} {{ arr_tz_short }} {%- endif -%}"           
-          "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_sched -%}"
-            " · {{ arr_est_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-
-          "{%- if arr_act -%}, A: {{ arr_act }} {{ arr_tz_short }} {%- endif -%}"         
-          "{%- if arr_tz_short and arr_tz_short != viewer_tz_short and arr_sched -%}"
-            " · {{ arr_act_viewer }} {{ viewer_tz_short }}"
-          "{%- endif -%}"
-       
-
-
-          "{%- if f.aircraft_type -%}"
-          "\nAircraft: {{ f.aircraft_type }}"
-          "{%- endif -%}"
-
-          "{%- if f.dep.terminal or f.dep.gate or f.arr.terminal or f.arr.gate -%}"
-          "\nT/G: {{ f.dep.airport.iata }} T.{{ f.dep.terminal or '—' }}{% if f.dep.gate %} G.{{ f.dep.gate }}{% endif %}"
-          " → {{ f.arr.airport.iata }} T.{{ f.arr.terminal or '—' }}{% if f.arr.gate %} G.{{ f.arr.gate }}{% endif %}"
-          "{%- endif -%}"
-
-          "{%- if f.travellers -%}"
-          "\nPax: {{ f.travellers | join(', ') }}"
-          "{%- endif -%}" ,
-
-        "multiline_secondary": "true",
-        "tap_action": { "action": "more-info" }
-      }{{ "," if not loop.last else "" }}
-    {%- endfor -%} ]
+  - entity: sensor.flight_dashboard_selected_flight
+    latitude: latitude
+    longitude: longitude
+    label: Aircraft
+    icon: mdi:airplane
+    size: 40
+    rotate: "{{ state_attr('sensor.flight_dashboard_selected_flight', 'heading') | int(0) }}"
 ```
 
 ## Services

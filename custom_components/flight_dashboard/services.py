@@ -12,12 +12,14 @@ so we accept an optional 2nd arg.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 from homeassistant.components.persistent_notification import async_create as notify
 
 from .const import (
@@ -26,6 +28,7 @@ from .const import (
     SERVICE_REMOVE_MANUAL_FLIGHT,
     SERVICE_CLEAR_MANUAL_FLIGHTS,
     SERVICE_REFRESH_NOW,
+    SERVICE_PRUNE_LANDED,
     SIGNAL_MANUAL_FLIGHTS_UPDATED,
 )
 from .manual_store import async_add_manual_flight, async_remove_manual_flight, async_clear_manual_flights
@@ -59,6 +62,11 @@ ADD_SCHEMA = vol.Schema(
 REMOVE_SCHEMA = vol.Schema({vol.Required("flight_key"): cv.string})
 CLEAR_SCHEMA = vol.Schema({})
 REFRESH_SCHEMA = vol.Schema({})
+PRUNE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("hours", default=0): vol.All(int, vol.Clamp(min=0, max=168)),
+    }
+)
 
 
 async def async_register_services(hass: HomeAssistant, _options_provider: Any | None = None) -> None:
@@ -106,7 +114,37 @@ async def async_register_services(hass: HomeAssistant, _options_provider: Any | 
         async_dispatcher_send(hass, SIGNAL_MANUAL_FLIGHTS_UPDATED)
         notify(hass, "Refresh triggered", title="Flight Dashboard — Refresh")
 
+    async def _prune(call: ServiceCall) -> None:
+        data = PRUNE_SCHEMA(dict(call.data))
+        hours = int(data.get("hours", 0))
+        cutoff = dt_util.utcnow() - timedelta(hours=hours)
+
+        st = hass.states.get("sensor.flight_dashboard_upcoming_flights")
+        flights = (st.attributes.get("flights") if st else None) or []
+
+        removed = 0
+        for f in flights:
+            if not isinstance(f, dict):
+                continue
+            if not f.get("editable", False):
+                continue
+            status = (f.get("status_state") or "").lower()
+            if status not in ("landed", "cancelled"):
+                continue
+            arr = (f.get("arr") or {})
+            arr_time = arr.get("actual") or arr.get("estimated") or arr.get("scheduled")
+            dt = dt_util.parse_datetime(arr_time) if isinstance(arr_time, str) else None
+            if not dt:
+                continue
+            dt = dt_util.as_utc(dt) if dt.tzinfo else dt_util.as_utc(dt_util.as_local(dt))
+            if dt <= cutoff:
+                if await async_remove_manual_flight(hass, f.get("flight_key", "")):
+                    removed += 1
+
+        notify(hass, f"Removed {removed} landed flights", title="Flight Dashboard — Pruned")
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_MANUAL_FLIGHT, _add, schema=ADD_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_REMOVE_MANUAL_FLIGHT, _remove, schema=REMOVE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_CLEAR_MANUAL_FLIGHTS, _clear, schema=CLEAR_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_REFRESH_NOW, _refresh, schema=REFRESH_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_PRUNE_LANDED, _prune, schema=PRUNE_SCHEMA)

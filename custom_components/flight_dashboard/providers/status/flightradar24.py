@@ -17,7 +17,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from ...fr24_client import FR24Client, FR24Error
+from ...fr24_client import FR24Client, FR24Error, FR24RateLimitError
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -81,6 +81,8 @@ class Flightradar24StatusProvider:
 
         try:
             data = await client.flight_summary_full(**params)
+        except FR24RateLimitError as e:
+            return {"provider": "flightradar24", "error": "rate_limited", "retry_after": e.retry_after}
         except FR24Error as e:
             return {"provider": "flightradar24", "error": "http_error", "detail": str(e)}
         except Exception as e:
@@ -115,6 +117,25 @@ class Flightradar24StatusProvider:
 
         aircraft_type = best.get("type") or best.get("aircraft_type")  # often ICAO type
 
+        position = None
+        if state == "active":
+            try:
+                pos_data = await client.live_flight_positions_light(flights=f"{airline}{fnum}")
+                rows = pos_data.get("data") or []
+                if isinstance(rows, list) and rows:
+                    p = rows[0]
+                    position = {
+                        "lat": p.get("lat"),
+                        "lon": p.get("lon"),
+                        "alt": p.get("alt"),
+                        "gspeed": p.get("gspeed"),
+                        "track": p.get("track"),
+                        "timestamp": p.get("timestamp"),
+                        "source": p.get("source"),
+                    }
+            except Exception:
+                position = None
+
         # Optional: provider may include airport tz info in some plans; keep placeholders
         return {
             "provider": "flightradar24",
@@ -122,6 +143,7 @@ class Flightradar24StatusProvider:
             "dep_actual": _iso(takeoff),
             "arr_actual": _iso(landed),
             "aircraft_type": aircraft_type,
+            "position": position,
             "dep_iata": orig or None,
             "arr_iata": dest or None,
             "orig_iata": orig or None,

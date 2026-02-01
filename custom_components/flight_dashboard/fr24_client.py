@@ -23,6 +23,15 @@ class FR24Error(Exception):
     """FR24 API error."""
 
 
+class FR24RateLimitError(FR24Error):
+    """FR24 rate limit or quota error."""
+
+    def __init__(self, status: int, retry_after: int | None = None) -> None:
+        super().__init__(f"HTTP {status}: rate_limited")
+        self.status = status
+        self.retry_after = retry_after
+
+
 @dataclass
 class FR24Client:
     hass: HomeAssistant
@@ -52,6 +61,12 @@ class FR24Client:
         async with session.get(url, headers=headers, params=params, timeout=30) as resp:
             text = await resp.text()
             if resp.status >= 400:
+                if resp.status in (402, 429):
+                    retry_after = None
+                    ra = resp.headers.get("Retry-After")
+                    if ra and ra.isdigit():
+                        retry_after = int(ra)
+                    raise FR24RateLimitError(resp.status, retry_after)
                 raise FR24Error(f"HTTP {resp.status}: {text[:300]}")
             return await resp.json()
 
@@ -60,6 +75,9 @@ class FR24Client:
 
     async def flight_summary_light(self, **params: Any) -> dict[str, Any]:
         return await self._get("/api/flight-summary/light", params=params)
+
+    async def live_flight_positions_light(self, **params: Any) -> dict[str, Any]:
+        return await self._get("/api/live/flight-positions/light", params=params)
 
     async def airport_full(self, code: str) -> dict[str, Any]:
         return await self._get(f"/api/static/airports/{code}/full")

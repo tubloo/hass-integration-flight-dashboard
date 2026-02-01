@@ -70,3 +70,15 @@ refresh_now:
   name: Refresh now
   description: Force a refresh of upcoming flights and status updates.
   fields: {}
+
+prune_landed:
+  name: Remove landed flights
+  description: Remove landed/cancelled manual flights. Optional hours delay after arrival.
+  fields:
+    hours:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 168
+          mode: box

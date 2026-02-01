@@ -10,6 +10,22 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .base import FlightStatus
 
 
+def _error_type(code: str, message: str) -> str:
+    code_l = (code or "").lower()
+    msg_l = (message or "").lower()
+    if code_l in {"rate_limit_reached"} or "rate limit" in msg_l:
+        return "rate_limited"
+    if code_l in {"usage_limit_reached"} or "quota" in msg_l or "limit" in msg_l:
+        return "quota_exceeded"
+    if code_l in {"invalid_access_key", "missing_access_key", "inactive_user"} or "access key" in msg_l:
+        return "auth_error"
+    if code_l in {"function_access_restricted"}:
+        return "plan_restricted"
+    if code_l in {"invalid_api_function", "404_not_found"}:
+        return "bad_request"
+    return "provider_error"
+
+
 def _parse_dt(s: str | None) -> str | None:
     if not s:
         return None
@@ -61,9 +77,36 @@ class AviationstackStatusProvider:
                 params = {"access_key": self.access_key, **params_extra}
                 async with session.get(url, params=params, timeout=25) as resp:
                     payload = await resp.json(content_type=None)
+                    retry_after = resp.headers.get("Retry-After")
 
                 if isinstance(payload, dict) and "error" in payload:
                     last_error = payload.get("error")
+                    if isinstance(last_error, dict):
+                        code = str(last_error.get("code") or last_error.get("type") or "")
+                        msg = str(last_error.get("info") or last_error.get("message") or "")
+                    else:
+                        code = ""
+                        msg = str(last_error)
+                    err_type = _error_type(code, msg)
+                    details = {
+                        "provider": "aviationstack",
+                        "state": "unknown",
+                        "error": err_type,
+                        "error_code": code or None,
+                        "error_message": msg or str(last_error),
+                    }
+                    if retry_after and retry_after.isdigit():
+                        details["retry_after"] = int(retry_after)
+                    elif err_type == "rate_limited":
+                        details["retry_after"] = 60
+                    elif err_type == "quota_exceeded":
+                        details["retry_after"] = 24 * 60 * 60
+                    return FlightStatus(provider="aviationstack", state="unknown", details=details)
+                if resp.status in (429, 402):
+                    details = {"provider": "aviationstack", "state": "unknown", "error": "rate_limited"}
+                    if retry_after and retry_after.isdigit():
+                        details["retry_after"] = int(retry_after)
+                    return FlightStatus(provider="aviationstack", state="unknown", details=details)
                     continue
 
                 data = payload.get("data") if isinstance(payload, dict) else None

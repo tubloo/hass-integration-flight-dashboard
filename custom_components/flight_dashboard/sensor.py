@@ -7,20 +7,26 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.event import async_track_point_in_utc_time, async_track_time_interval, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SIGNAL_MANUAL_FLIGHTS_UPDATED
+from .const import DOMAIN, SIGNAL_MANUAL_FLIGHTS_UPDATED, EVENT_UPDATED
 from .coordinator_agg import merge_segments
 from .providers.itinerary.manual import ManualItineraryProvider
 from .manual_store import async_remove_manual_flight
 from .status_manager import async_update_statuses
 from .tz_short import tz_short_name
-from .airport_tz import get_airport_tz
+from .airport_tz import get_airport_tz, get_airport_info
+from .directory import get_airport, get_airline
+from .fr24_client import FR24Client, FR24RateLimitError, FR24Error
+from .rate_limit import get_blocks, is_blocked, get_block_until, get_block_reason, set_block
+from .selected import get_selected_flight, get_flight_position
 
 
 SCHEMA_VERSION = 3
@@ -32,9 +38,13 @@ Flight Dashboard schema (v3)
 Per flight:
 - dep.scheduled/estimated/actual
 - arr.scheduled/estimated/actual
+- dep.scheduled_local/estimated_local/actual_local (airport local time)
+- arr.scheduled_local/estimated_local/actual_local (airport local time)
 - dep.airport.tz + tz_short
 - arr.airport.tz + tz_short
 - airline_logo_url (optional), aircraft_type (optional)
+- delay_status (on_time|delayed|cancelled|arrived|unknown)
+- delay_minutes (minutes vs sched; arrival preferred if available)
 """.strip()
 
 SCHEMA_EXAMPLE: dict[str, Any] = {
@@ -45,13 +55,29 @@ SCHEMA_EXAMPLE: dict[str, Any] = {
     "aircraft_type": "B788",
     "travellers": ["Sumit", "Parul"],
     "status_state": "scheduled",
+    "delay_status": "on_time",
+    "delay_minutes": 0,
     "dep": {"airport": {"iata": "DEL", "tz": "Asia/Kolkata", "tz_short": "IST", "city": "Delhi"}, "scheduled": "2026-01-30T14:00:00+00:00"},
     "arr": {"airport": {"iata": "CPH", "tz": "Europe/Copenhagen", "tz_short": "CET", "city": "Copenhagen"}, "scheduled": "2026-01-30T18:55:00+00:00"},
 }
 
+# Options keys (keep local to avoid config_flow import)
+CONF_FR24_API_KEY = "fr24_api_key"
+CONF_FR24_SANDBOX_KEY = "fr24_sandbox_key"
+CONF_FR24_USE_SANDBOX = "fr24_use_sandbox"
+CONF_FR24_API_VERSION = "fr24_api_version"
+
+FR24_USAGE_REFRESH = timedelta(minutes=30)
+PROVIDER_BLOCK_REFRESH = timedelta(minutes=1)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities) -> None:
-    entities = [FlightDashboardUpcomingFlightsSensor(hass, entry)]
+    entities = [
+        FlightDashboardUpcomingFlightsSensor(hass, entry),
+        FlightDashboardSelectedFlightSensor(hass, entry),
+        FlightDashboardFr24UsageSensor(hass, entry),
+        FlightDashboardProviderBlockSensor(hass, entry),
+    ]
     try:
         from .preview_sensor import FlightDashboardAddPreviewSensor
     except Exception:
@@ -142,6 +168,39 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
         flights = merge_segments(segments)
 
+        # Filter by include_past_hours using departure local time (airport tz when available)
+        def _as_tz(dt, tzname: str | None):
+            if not tzname:
+                return dt
+            try:
+                return dt.astimezone(ZoneInfo(tzname))
+            except Exception:
+                return dt
+
+        def _dep_dt_local(f: dict[str, Any]):
+            dep = f.get("dep") or {}
+            dep_air = (dep.get("airport") or {})
+            dep_time = dep.get("actual") or dep.get("estimated") or dep.get("scheduled")
+            if not isinstance(dep_time, str):
+                return None
+            dt = dt_util.parse_datetime(dep_time)
+            if not dt:
+                return None
+            dt = dt_util.as_utc(dt) if dt.tzinfo else dt_util.as_utc(dt_util.as_local(dt))
+            return _as_tz(dt, dep_air.get("tz"))
+
+        if include_past is not None:
+            pruned: list[dict[str, Any]] = []
+            for f in flights:
+                dep_local = _dep_dt_local(f)
+                if not dep_local:
+                    pruned.append(f)
+                    continue
+                now_local = _as_tz(now, (f.get("dep") or {}).get("airport", {}).get("tz"))
+                if now_local - dep_local <= timedelta(hours=include_past):
+                    pruned.append(f)
+            flights = pruned
+
         # Limit number of flights early (oldest first)
         if max_flights and len(flights) > max_flights:
             flights = flights[:max_flights]
@@ -185,10 +244,47 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
             dep_sched = dep.get("scheduled")
             arr_sched = arr.get("scheduled")
 
+            # Enrich from directory cache/providers (optional)
+            airline_code = flight.get("airline_code")
+            if airline_code and not flight.get("airline_name"):
+                airline = await get_airline(self.hass, options, airline_code)
+                if airline:
+                    flight["airline_name"] = airline.get("name") or flight.get("airline_name")
+                    if not flight.get("airline_logo_url"):
+                        flight["airline_logo_url"] = airline.get("logo") or flight.get("airline_logo_url")
+
+            if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
+                airport = await get_airport(self.hass, options, dep_air.get("iata"))
+                if airport:
+                    dep_air["name"] = dep_air.get("name") or airport.get("name")
+                    dep_air["city"] = dep_air.get("city") or airport.get("city")
+                    dep_air["tz"] = dep_air.get("tz") or airport.get("tz")
+
+            if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
+                airport = await get_airport(self.hass, options, arr_air.get("iata"))
+                if airport:
+                    arr_air["name"] = arr_air.get("name") or airport.get("name")
+                    arr_air["city"] = arr_air.get("city") or airport.get("city")
+                    arr_air["tz"] = arr_air.get("tz") or airport.get("tz")
+
             if not dep_air.get("tz"):
                 dep_air["tz"] = get_airport_tz(dep_air.get("iata"), options)
             if not arr_air.get("tz"):
                 arr_air["tz"] = get_airport_tz(arr_air.get("iata"), options)
+
+            # Fill basic name/city/tz from static map if still missing
+            if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
+                info = get_airport_info(dep_air.get("iata"), options)
+                if info:
+                    dep_air["name"] = dep_air.get("name") or info.get("name")
+                    dep_air["city"] = dep_air.get("city") or info.get("city")
+                    dep_air["tz"] = dep_air.get("tz") or info.get("tz")
+            if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
+                info = get_airport_info(arr_air.get("iata"), options)
+                if info:
+                    arr_air["name"] = arr_air.get("name") or info.get("name")
+                    arr_air["city"] = arr_air.get("city") or info.get("city")
+                    arr_air["tz"] = arr_air.get("tz") or info.get("tz")
 
             if dep_air.get("tz") and not dep_air.get("tz_short"):
                 dep_air["tz_short"] = tz_short_name(dep_air.get("tz"), dep_sched)
@@ -197,6 +293,28 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
             dep["airport"] = dep_air
             arr["airport"] = arr_air
+
+            def _to_local(ts: Any, tzname: str | None) -> str | None:
+                if not ts or not tzname or not isinstance(ts, str):
+                    return None
+                dt = dt_util.parse_datetime(ts)
+                if not dt:
+                    return None
+                if not dt.tzinfo:
+                    # Treat naive timestamps as UTC; schedule/status resolvers should normalize
+                    dt = dt.replace(tzinfo=dt_util.UTC)
+                try:
+                    return dt.astimezone(ZoneInfo(tzname)).isoformat()
+                except Exception:
+                    return None
+
+            dep["scheduled_local"] = _to_local(dep.get("scheduled"), dep_air.get("tz"))
+            dep["estimated_local"] = _to_local(dep.get("estimated"), dep_air.get("tz"))
+            dep["actual_local"] = _to_local(dep.get("actual"), dep_air.get("tz"))
+            arr["scheduled_local"] = _to_local(arr.get("scheduled"), arr_air.get("tz"))
+            arr["estimated_local"] = _to_local(arr.get("estimated"), arr_air.get("tz"))
+            arr["actual_local"] = _to_local(arr.get("actual"), arr_air.get("tz"))
+
             flight["dep"] = dep
             flight["arr"] = arr
 
@@ -218,3 +336,233 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
                 self.hass.async_create_task(self._rebuild())
 
             self._next_refresh_unsub = async_track_point_in_utc_time(self.hass, _scheduled_refresh, next_refresh)
+
+
+class FlightDashboardSelectedFlightSensor(SensorEntity):
+    _attr_name = "Flight Dashboard Selected Flight"
+    _attr_icon = "mdi:airplane"
+
+    def __init__(self, hass: HomeAssistant, entry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{DOMAIN}_selected_flight"
+        self._unsub_state = None
+        self._unsub_bus = None
+        self._flight: dict[str, Any] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        @callback
+        def _kick(_event=None) -> None:
+            self.hass.async_create_task(self._refresh())
+
+        self._unsub_state = async_track_state_change_event(
+            self.hass,
+            ["sensor.flight_dashboard_upcoming_flights", "select.flight_dashboard_selected_flight"],
+            _kick,
+        )
+        self._unsub_bus = self.hass.bus.async_listen(EVENT_UPDATED, _kick)
+
+        await self._refresh()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub_state:
+            self._unsub_state()
+            self._unsub_state = None
+        if self._unsub_bus:
+            self._unsub_bus()
+            self._unsub_bus = None
+
+    @property
+    def native_value(self) -> str:
+        if not self._flight:
+            return "No flight"
+        key = self._flight.get("flight_key") or "Selected flight"
+        pos = get_flight_position(self._flight) or {}
+        ts = pos.get("timestamp") or self._flight.get("status_updated_at")
+        return f"{key} | {ts}" if ts else key
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        pos = get_flight_position(self._flight)
+        return {
+            "flight": self._flight,
+            "latitude": (pos or {}).get("lat"),
+            "longitude": (pos or {}).get("lon"),
+            "heading": (pos or {}).get("track") or 0,
+            "map_key": (self._flight or {}).get("flight_key"),
+        }
+
+    async def _refresh(self) -> None:
+        self._flight = get_selected_flight(self.hass)
+        self.async_write_ha_state()
+
+
+class FlightDashboardFr24UsageSensor(SensorEntity):
+    _attr_name = "Flight Dashboard FR24 Usage"
+    _attr_icon = "mdi:chart-box"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+    _attr_native_unit_of_measurement = "credits"
+
+    def __init__(self, hass: HomeAssistant, entry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{DOMAIN}_fr24_usage"
+        self._unsub: Callable[[], None] | None = None
+        self._usage: dict[str, Any] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await self._update()
+
+        @callback
+        def _on_tick(_now) -> None:
+            self.hass.async_create_task(self._update())
+
+        self._unsub = async_track_time_interval(self.hass, _on_tick, FR24_USAGE_REFRESH)
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._usage or {}
+
+    async def _update(self) -> None:
+        options = dict(self.entry.options)
+        use_sandbox = bool(options.get(CONF_FR24_USE_SANDBOX, False))
+        fr24_key = (options.get(CONF_FR24_API_KEY) or "").strip()
+        fr24_sandbox_key = (options.get(CONF_FR24_SANDBOX_KEY) or "").strip()
+        api_version = (options.get(CONF_FR24_API_VERSION) or "v1").strip() or "v1"
+
+        key = fr24_sandbox_key if use_sandbox and fr24_sandbox_key else fr24_key
+        if not key:
+            self._attr_available = False
+            self._usage = {"error": "missing_api_key", "sandbox": use_sandbox}
+            self.async_write_ha_state()
+            return
+
+        if is_blocked(self.hass, "flightradar24"):
+            until = get_block_until(self.hass, "flightradar24")
+            reason = get_block_reason(self.hass, "flightradar24")
+            self._attr_available = True
+            self._usage = {
+                "blocked": True,
+                "blocked_until": dt_util.as_local(until).isoformat() if until else None,
+                "blocked_reason": reason,
+                "sandbox": use_sandbox,
+            }
+            self._attr_native_value = None
+            self.async_write_ha_state()
+            return
+
+        client = FR24Client(self.hass, key, use_sandbox=use_sandbox, api_version=api_version)
+        try:
+            data = await client.usage()
+        except FR24RateLimitError as e:
+            seconds = int(e.retry_after or 3600)
+            set_block(self.hass, "flightradar24", seconds, "rate_limited")
+            self._attr_available = True
+            self._usage = {
+                "blocked": True,
+                "blocked_until": (dt_util.utcnow() + timedelta(seconds=seconds)).isoformat(),
+                "blocked_reason": "rate_limited",
+                "sandbox": use_sandbox,
+            }
+            self._attr_native_value = None
+            self.async_write_ha_state()
+            return
+        except FR24Error as e:
+            self._attr_available = False
+            self._usage = {"error": str(e), "sandbox": use_sandbox}
+            self.async_write_ha_state()
+            return
+        except Exception as e:
+            self._attr_available = False
+            self._usage = {"error": str(e), "sandbox": use_sandbox}
+            self.async_write_ha_state()
+            return
+
+        items = data.get("data") or []
+        total_credits = 0
+        total_requests = 0
+        by_endpoint: list[dict[str, Any]] = []
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                total_credits += int(item.get("credits") or 0)
+                total_requests += int(item.get("request_count") or 0)
+                by_endpoint.append(
+                    {
+                        "endpoint": item.get("endpoint"),
+                        "credits": int(item.get("credits") or 0),
+                        "requests": int(item.get("request_count") or 0),
+                    }
+                )
+
+        self._attr_available = True
+        self._attr_native_value = total_credits
+        self._usage = {
+            "credits_used": total_credits,
+            "requests": total_requests,
+            "endpoints": by_endpoint,
+            "sandbox": use_sandbox,
+            "api_version": api_version,
+        }
+        self.async_write_ha_state()
+
+
+class FlightDashboardProviderBlockSensor(SensorEntity):
+    _attr_name = "Flight Dashboard Provider Blocks"
+    _attr_icon = "mdi:shield-alert"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{DOMAIN}_provider_blocks"
+        self._unsub: Callable[[], None] | None = None
+        self._blocks: dict[str, Any] = {}
+
+    async def async_added_to_hass(self) -> None:
+        await self._update()
+
+        @callback
+        def _on_tick(_now) -> None:
+            self.hass.async_create_task(self._update())
+
+        self._unsub = async_track_time_interval(self.hass, _on_tick, PROVIDER_BLOCK_REFRESH)
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._blocks
+
+    async def _update(self) -> None:
+        now = dt_util.utcnow()
+        blocks = get_blocks(self.hass)
+        active: dict[str, Any] = {}
+        for provider, info in blocks.items():
+            until = info.get("until")
+            if not until:
+                continue
+            if now >= until:
+                continue
+            remaining = int((until - now).total_seconds())
+            active[provider] = {
+                "until": dt_util.as_local(until).isoformat(),
+                "seconds_remaining": remaining,
+                "reason": info.get("reason"),
+            }
+
+        self._blocks = {"blocked_count": len(active), "providers": active}
+        self._attr_available = True
+        self._attr_native_value = "blocked" if active else "ok"
+        self.async_write_ha_state()
