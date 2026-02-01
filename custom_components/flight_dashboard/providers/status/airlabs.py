@@ -106,8 +106,10 @@ class AirLabsStatusProvider:
 
         status = (resp_obj.get("status") or "unknown").lower()
 
-        dep_sched = resp_obj.get("dep_scheduled") or resp_obj.get("dep_time_utc") or resp_obj.get("dep_time")
-        arr_sched = resp_obj.get("arr_scheduled") or resp_obj.get("arr_time_utc") or resp_obj.get("arr_time")
+        # AirLabs exposes both local and UTC variants. Prefer UTC when present;
+        # the API sometimes returns local times that are already shifted.
+        dep_sched = resp_obj.get("dep_time_utc") or resp_obj.get("dep_scheduled") or resp_obj.get("dep_time")
+        arr_sched = resp_obj.get("arr_time_utc") or resp_obj.get("arr_scheduled") or resp_obj.get("arr_time")
         dep_est = resp_obj.get("dep_estimated_utc") or resp_obj.get("dep_estimated")
         dep_act = resp_obj.get("dep_actual_utc") or resp_obj.get("dep_actual")
         arr_est = resp_obj.get("arr_estimated_utc") or resp_obj.get("arr_estimated")
