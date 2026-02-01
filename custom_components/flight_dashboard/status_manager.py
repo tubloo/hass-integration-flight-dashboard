@@ -107,12 +107,9 @@ def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minu
 
     if dep and now < dep:
         delta = dep - now
-        if delta > timedelta(days=2):
-            return max(ttl_seconds, 12 * 60 * 60)
-        if delta > timedelta(days=1):
-            return max(ttl_seconds, 6 * 60 * 60)
+        # Do not poll until we are within 6 hours of scheduled departure
         if delta > timedelta(hours=6):
-            return max(ttl_seconds, 2 * 60 * 60)
+            return None
         if delta > timedelta(hours=2):
             return max(ttl_seconds, 30 * 60)
         return max(ttl_seconds, 10 * 60)
