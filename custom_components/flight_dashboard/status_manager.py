@@ -131,6 +131,7 @@ async def _fetch_status(hass: HomeAssistant, options: dict[str, Any], flight: di
     fr24_active_key = fr24_sandbox_key if use_sandbox and fr24_sandbox_key else fr24_key
     av_key = (options.get("aviationstack_access_key") or "").strip()
     al_key = (options.get("airlabs_api_key") or "").strip()
+    fa_key = (options.get("flightapi_api_key") or "").strip()
     os_user = (options.get("opensky_username") or "").strip()
     os_pass = (options.get("opensky_password") or "").strip()
     fr24_version = (options.get("fr24_api_version") or "v1").strip()
@@ -188,6 +189,20 @@ async def _fetch_status(hass: HomeAssistant, options: dict[str, Any], flight: di
             reason = out.get("error")
             block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
             set_block(hass, "airlabs", block_for, reason)
+            return None
+        return out
+
+    if provider == "flightapi" and fa_key:
+        if is_blocked(hass, "flightapi"):
+            return None
+        from .providers.status.flightapi import FlightAPIStatusProvider
+
+        res = await FlightAPIStatusProvider(hass, fa_key).async_get_status(flight)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "flightapi", block_for, reason)
             return None
         return out
 
@@ -264,6 +279,20 @@ async def _fetch_status(hass: HomeAssistant, options: dict[str, Any], flight: di
             reason = out.get("error")
             block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
             set_block(hass, "airlabs", block_for, reason)
+            return None
+        return out
+
+    if fa_key:
+        if is_blocked(hass, "flightapi"):
+            return None
+        from .providers.status.flightapi import FlightAPIStatusProvider
+
+        res = await FlightAPIStatusProvider(hass, fa_key).async_get_status(flight)
+        out = _unwrap(res)
+        if isinstance(out, dict) and out.get("error") in ("rate_limited", "quota_exceeded"):
+            reason = out.get("error")
+            block_for = out.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+            set_block(hass, "flightapi", block_for, reason)
             return None
         return out
 

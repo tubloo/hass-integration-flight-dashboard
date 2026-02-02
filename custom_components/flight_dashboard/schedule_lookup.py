@@ -5,9 +5,10 @@ Output: canonical Flight v3 dict (minimal schedule) OR error.
 
 This module is designed so we can swap providers later.
 Right now it tries providers in this order:
-1) flightradar24 (if configured)
-2) aviationstack (if configured)
-3) airlabs (if configured)
+1) aviationstack (if configured)
+2) airlabs (if configured)
+3) flightapi (if configured)
+4) flightradar24 (if configured)
 
 If none configured -> error no_provider
 """
@@ -30,6 +31,7 @@ CONF_STATUS_PROVIDER = "status_provider"
 CONF_SCHEDULE_PROVIDER = "schedule_provider"
 CONF_AVIATIONSTACK_KEY = "aviationstack_access_key"
 CONF_AIRLABS_KEY = "airlabs_api_key"
+CONF_FLIGHTAPI_KEY = "flightapi_api_key"
 CONF_FR24_API_KEY = "fr24_api_key"
 CONF_FR24_SANDBOX_KEY = "fr24_sandbox_key"
 CONF_FR24_USE_SANDBOX = "fr24_use_sandbox"
@@ -127,17 +129,20 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
     fr24_active_key = fr24_sandbox_key if use_sandbox and fr24_sandbox_key else fr24_key
     av_key = (options.get(CONF_AVIATIONSTACK_KEY) or "").strip()
     al_key = (options.get(CONF_AIRLABS_KEY) or "").strip()
+    fa_key = (options.get(CONF_FLIGHTAPI_KEY) or "").strip()
 
     schedule_pref = (options.get(CONF_SCHEDULE_PROVIDER) or "auto").lower()
     if schedule_pref == "aviationstack" and not av_key:
         return {"error": "no_provider", "hint": "Aviationstack API key is required for schedule lookup."}
     if schedule_pref == "airlabs" and not al_key:
         return {"error": "no_provider", "hint": "AirLabs API key is required for schedule lookup."}
+    if schedule_pref == "flightapi" and not fa_key:
+        return {"error": "no_provider", "hint": "FlightAPI.io API key is required for schedule lookup."}
     if schedule_pref == "flightradar24" and not fr24_active_key:
         return {"error": "no_provider", "hint": "FR24 API key is required for schedule lookup."}
 
     if schedule_pref == "auto":
-        order = ["aviationstack", "airlabs", "flightradar24", "mock"]
+        order = ["aviationstack", "airlabs", "flightapi", "flightradar24", "mock"]
     else:
         order = [schedule_pref]
         if "mock" not in order:
@@ -359,8 +364,65 @@ async def lookup_schedule(hass: HomeAssistant, options: dict[str, Any], query: s
                     return {"error": "provider_error", "hint": "AirLabs rate limit reached. Try again later."}
 
     # If no provider keys configured
-    if not (av_key or al_key or fr24_key):
+    if not (av_key or al_key or fa_key or fr24_key):
         return {"error": "no_provider", "hint": "No schedule provider configured. Add an API key in Flight Dashboard options."}
 
     # If we reach here, we couldn't match (or providers not implemented for schedule lookups)
     return {"error": "no_match", "hint": "No match found for that date (or provider limits). Try a different date."}
+    if "flightapi" in order and fa_key and not is_blocked(hass, "flightapi"):
+        try:
+            from .providers.status.flightapi import FlightAPIStatusProvider
+        except Exception:
+            FlightAPIStatusProvider = None  # type: ignore
+
+        if FlightAPIStatusProvider:
+            st = await FlightAPIStatusProvider(hass, fa_key).async_get_status(
+                {"airline_code": airline_code, "flight_number": flight_number, "scheduled_departure": f"{date_str}T00:00:00+00:00"}
+            )
+            details = st.details if st else None
+            if isinstance(details, dict) and not details.get("error"):
+                dep_sched = details.get("dep_scheduled")
+                arr_sched = details.get("arr_scheduled")
+                dep_iata = details.get("dep_iata") or None
+                arr_iata = details.get("arr_iata") or None
+                flight = {
+                    "schema_version": 3,
+                    "source": "manual",
+                    "flight_key": None,
+                    "airline_code": airline_code,
+                    "flight_number": flight_number,
+                    "airline_name": details.get("airline_name"),
+                    "airline_logo_url": details.get("airline_logo_url"),
+                    "aircraft_type": details.get("aircraft_type"),
+                    "travellers": [],
+                    "status_state": details.get("state") or "unknown",
+                    "notes": None,
+                    "dep": {
+                        "airport": {"iata": dep_iata, "name": None, "city": None, "tz": details.get("dep_tz"), "tz_short": None},
+                        "scheduled": dep_sched,
+                        "estimated": details.get("dep_estimated"),
+                        "actual": details.get("dep_actual"),
+                        "terminal": details.get("terminal_dep"),
+                        "gate": details.get("gate_dep"),
+                    },
+                    "arr": {
+                        "airport": {"iata": arr_iata, "name": None, "city": None, "tz": details.get("arr_tz"), "tz_short": None},
+                        "scheduled": arr_sched,
+                        "estimated": details.get("arr_estimated"),
+                        "actual": details.get("arr_actual"),
+                        "terminal": details.get("terminal_arr"),
+                        "gate": details.get("gate_arr"),
+                    },
+                }
+                return {"flight": _normalize_flight_times(flight), "provider": "flightapi"}
+            if isinstance(details, dict) and details.get("error") in ("rate_limited", "quota_exceeded"):
+                reason = details.get("error")
+                block_for = details.get("retry_after") or (24 * 60 * 60 if reason == "quota_exceeded" else 900)
+                set_block(hass, "flightapi", block_for, reason)
+                details = None
+            if isinstance(details, dict) and details.get("error"):
+                _LOGGER.warning("FlightAPI schedule lookup error: %s", details.get("error_message") or details.get("error"))
+                if details.get("error") == "quota_exceeded":
+                    return {"error": "provider_error", "hint": "FlightAPI.io quota exceeded. Try again later."}
+                if details.get("error") == "rate_limited":
+                    return {"error": "provider_error", "hint": "FlightAPI.io rate limit reached. Try again later."}

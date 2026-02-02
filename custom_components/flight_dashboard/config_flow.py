@@ -36,6 +36,7 @@ CONF_STATUS_TTL_MINUTES = "status_ttl_minutes"
 CONF_DELAY_GRACE_MINUTES = "delay_grace_minutes"
 CONF_AVIATIONSTACK_KEY = "aviationstack_access_key"
 CONF_AIRLABS_KEY = "airlabs_api_key"
+CONF_FLIGHTAPI_KEY = "flightapi_api_key"
 CONF_OPENSKY_USERNAME = "opensky_username"
 CONF_OPENSKY_PASSWORD = "opensky_password"
 
@@ -118,6 +119,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
             options[CONF_DELAY_GRACE_MINUTES] = user_input[CONF_DELAY_GRACE_MINUTES]
             options[CONF_AVIATIONSTACK_KEY] = user_input.get(CONF_AVIATIONSTACK_KEY, "").strip()
             options[CONF_AIRLABS_KEY] = user_input.get(CONF_AIRLABS_KEY, "").strip()
+            options[CONF_FLIGHTAPI_KEY] = user_input.get(CONF_FLIGHTAPI_KEY, "").strip()
             options[CONF_OPENSKY_USERNAME] = user_input.get(CONF_OPENSKY_USERNAME, "").strip()
             options[CONF_OPENSKY_PASSWORD] = user_input.get(CONF_OPENSKY_PASSWORD, "").strip()
 
@@ -154,6 +156,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
         grace = options.get(CONF_DELAY_GRACE_MINUTES, DEFAULT_DELAY_GRACE_MINUTES)
         av_key = options.get(CONF_AVIATIONSTACK_KEY, "")
         al_key = options.get(CONF_AIRLABS_KEY, "")
+        fa_key = options.get(CONF_FLIGHTAPI_KEY, "")
         os_user = options.get(CONF_OPENSKY_USERNAME, "")
         os_pass = options.get(CONF_OPENSKY_PASSWORD, "")
 
@@ -181,6 +184,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                     selector.SelectOptionDict(value="auto", label="Auto (best available)"),
                     selector.SelectOptionDict(value="aviationstack", label="Aviationstack"),
                     selector.SelectOptionDict(value="airlabs", label="AirLabs"),
+                    selector.SelectOptionDict(value="flightapi", label="FlightAPI.io"),
                     selector.SelectOptionDict(value="flightradar24", label="Flightradar24"),
                     selector.SelectOptionDict(value="mock", label="Mock"),
                 ],
@@ -194,6 +198,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                     selector.SelectOptionDict(value="local", label="Local (no API)"),
                     selector.SelectOptionDict(value="aviationstack", label="Aviationstack"),
                     selector.SelectOptionDict(value="airlabs", label="AirLabs"),
+                    selector.SelectOptionDict(value="flightapi", label="FlightAPI.io"),
                     selector.SelectOptionDict(value="opensky", label="OpenSky"),
                     selector.SelectOptionDict(value="flightradar24", label="Flightradar24"),
                     selector.SelectOptionDict(value="mock", label="Mock"),
@@ -215,6 +220,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Required(CONF_SCHEDULE_PROVIDER, default=schedule_provider): schedule_selector,
                 vol.Optional(CONF_AVIATIONSTACK_KEY, default=av_key): str,
                 vol.Optional(CONF_AIRLABS_KEY, default=al_key): str,
+                vol.Optional(CONF_FLIGHTAPI_KEY, default=fa_key): str,
 
                 # Status provider
                 vol.Required(CONF_STATUS_PROVIDER, default=status_provider): status_selector,

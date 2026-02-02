@@ -42,6 +42,7 @@
           "delay_grace_minutes": "Delay grace (minutes)",
           "aviationstack_access_key": "Aviationstack API key",
           "airlabs_api_key": "AirLabs API key",
+          "flightapi_api_key": "FlightAPI.io API key",
           "opensky_username": "OpenSky username",
           "opensky_password": "OpenSky password",
           "fr24_api_key": "Flightradar24 API key",

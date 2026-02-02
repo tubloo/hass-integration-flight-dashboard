@@ -177,6 +177,7 @@ Logic:
 - Auto (best available)
 - Aviationstack
 - AirLabs
+- FlightAPI.io
 - Flightradar24
 - Mock
 
@@ -184,6 +185,7 @@ Logic:
 - Flightradar24 (default)
 - Aviationstack
 - AirLabs
+- FlightAPI.io
 - OpenSky (tracking-only)
 - Local (no API calls)
 - Mock
