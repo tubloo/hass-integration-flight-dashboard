@@ -5,6 +5,8 @@ Track upcoming flights in Home Assistant with minimal input.
 - Add flights by airline code + flight number + date (optional departure airport to disambiguate)
 - Preview before saving
 - Schedule provider and status provider can be set independently
+- Position provider can be set independently for live map updates
+- Merge tolerance prevents duplicate flights when schedule/status overlap (default 6 hours)
 - Smart status refresh with API call rationing
 - On-demand refresh button/service
 - Optional auto-removal of landed/cancelled manual flights

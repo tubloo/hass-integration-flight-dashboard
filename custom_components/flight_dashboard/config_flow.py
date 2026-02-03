@@ -31,6 +31,7 @@ CONF_CACHE_TTL_DAYS = "cache_ttl_days"
 
 # Status options
 CONF_STATUS_PROVIDER = "status_provider"  # local|aviationstack|airlabs|opensky|flightradar24
+CONF_POSITION_PROVIDER = "position_provider"  # same_as_status|flightradar24|opensky|airlabs|none
 CONF_SCHEDULE_PROVIDER = "schedule_provider"  # auto|aviationstack|airlabs|flightradar24|mock
 CONF_STATUS_TTL_MINUTES = "status_ttl_minutes"
 CONF_DELAY_GRACE_MINUTES = "delay_grace_minutes"
@@ -67,6 +68,7 @@ DEFAULT_CACHE_DIRECTORY = True
 DEFAULT_CACHE_TTL_DAYS = 90
 
 DEFAULT_STATUS_PROVIDER = "flightradar24"
+DEFAULT_POSITION_PROVIDER = "same_as_status"
 DEFAULT_SCHEDULE_PROVIDER = "auto"
 DEFAULT_STATUS_TTL_MINUTES = 5
 DEFAULT_DELAY_GRACE_MINUTES = 10
@@ -114,6 +116,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
 
             # Status
             options[CONF_STATUS_PROVIDER] = user_input[CONF_STATUS_PROVIDER]
+            options[CONF_POSITION_PROVIDER] = user_input.get(CONF_POSITION_PROVIDER, DEFAULT_POSITION_PROVIDER)
             options[CONF_SCHEDULE_PROVIDER] = user_input[CONF_SCHEDULE_PROVIDER]
             options[CONF_STATUS_TTL_MINUTES] = user_input[CONF_STATUS_TTL_MINUTES]
             options[CONF_DELAY_GRACE_MINUTES] = user_input[CONF_DELAY_GRACE_MINUTES]
@@ -151,6 +154,7 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
         cache_ttl_days = options.get(CONF_CACHE_TTL_DAYS, DEFAULT_CACHE_TTL_DAYS)
 
         status_provider = options.get(CONF_STATUS_PROVIDER, DEFAULT_STATUS_PROVIDER)
+        position_provider = options.get(CONF_POSITION_PROVIDER, DEFAULT_POSITION_PROVIDER)
         schedule_provider = options.get(CONF_SCHEDULE_PROVIDER, DEFAULT_SCHEDULE_PROVIDER)
         ttl = options.get(CONF_STATUS_TTL_MINUTES, DEFAULT_STATUS_TTL_MINUTES)
         grace = options.get(CONF_DELAY_GRACE_MINUTES, DEFAULT_DELAY_GRACE_MINUTES)
@@ -207,43 +211,83 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
+        position_selector = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    selector.SelectOptionDict(value="same_as_status", label="Same as status provider"),
+                    selector.SelectOptionDict(value="flightradar24", label="Flightradar24"),
+                    selector.SelectOptionDict(value="opensky", label="OpenSky"),
+                    selector.SelectOptionDict(value="airlabs", label="AirLabs"),
+                    selector.SelectOptionDict(value="none", label="Disabled"),
+                ],
+                multiple=False,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
 
-        schema = vol.Schema(
+        schema_dict: dict[Any, Any] = {
+            # Providers
+            vol.Required(CONF_SCHEDULE_PROVIDER, default=schedule_provider): schedule_selector,
+            vol.Required(CONF_STATUS_PROVIDER, default=status_provider): status_selector,
+            vol.Required(CONF_POSITION_PROVIDER, default=position_provider): position_selector,
+            vol.Required(CONF_ITINERARY_PROVIDERS, default=providers): itinerary_selector,
+
+            # API keys
+            vol.Optional(CONF_FLIGHTAPI_KEY, default=fa_key): str,
+            vol.Optional(CONF_FR24_API_KEY, default=fr24_key): str,
+            vol.Optional(CONF_FR24_SANDBOX_KEY, default=fr24_sandbox_key): str,
+            vol.Optional(CONF_FR24_USE_SANDBOX, default=fr24_sandbox): bool,
+            vol.Optional(CONF_AVIATIONSTACK_KEY, default=av_key): str,
+            vol.Optional(CONF_AIRLABS_KEY, default=al_key): str,
+            vol.Optional(CONF_OPENSKY_USERNAME, default=os_user): str,
+            vol.Optional(CONF_OPENSKY_PASSWORD, default=os_pass): str,
+        }
+
+        # TripIt (only show if selected)
+        if "tripit" in providers:
+            schema_dict.update(
+                {
+                    vol.Optional(CONF_TRIPIT_CONSUMER_KEY, default=tripit_key): str,
+                    vol.Optional(CONF_TRIPIT_CONSUMER_SECRET, default=tripit_secret): str,
+                    vol.Optional(CONF_TRIPIT_AUTHORIZE_NOW, default=False): bool,
+                }
+            )
+
+        # Refresh & rate limits
+        schema_dict.update(
             {
-                # Itinerary providers
-                vol.Required(CONF_ITINERARY_PROVIDERS, default=providers): itinerary_selector,
-                vol.Optional(CONF_TRIPIT_CONSUMER_KEY, default=tripit_key): str,
-                vol.Optional(CONF_TRIPIT_CONSUMER_SECRET, default=tripit_secret): str,
-                vol.Optional(CONF_TRIPIT_AUTHORIZE_NOW, default=False): bool,
-
-                # Schedule lookup provider
-                vol.Required(CONF_SCHEDULE_PROVIDER, default=schedule_provider): schedule_selector,
-                vol.Optional(CONF_AVIATIONSTACK_KEY, default=av_key): str,
-                vol.Optional(CONF_AIRLABS_KEY, default=al_key): str,
-                vol.Optional(CONF_FLIGHTAPI_KEY, default=fa_key): str,
-
-                # Status provider
-                vol.Required(CONF_STATUS_PROVIDER, default=status_provider): status_selector,
                 vol.Required(CONF_STATUS_TTL_MINUTES, default=ttl): vol.All(int, vol.Clamp(min=1, max=120)),
                 vol.Required(CONF_DELAY_GRACE_MINUTES, default=grace): vol.All(int, vol.Clamp(min=0, max=60)),
-                vol.Optional(CONF_FR24_API_KEY, default=fr24_key): str,
-                vol.Optional(CONF_FR24_SANDBOX_KEY, default=fr24_sandbox_key): str,
-                vol.Optional(CONF_FR24_USE_SANDBOX, default=fr24_sandbox): bool,
-                vol.Optional(CONF_FR24_API_VERSION, default=fr24_version): str,
-                vol.Optional(CONF_OPENSKY_USERNAME, default=os_user): str,
-                vol.Optional(CONF_OPENSKY_PASSWORD, default=os_pass): str,
-
-                # List behavior
-                vol.Required(CONF_DAYS_AHEAD, default=days_ahead): vol.All(int, vol.Clamp(min=1, max=365)),
                 vol.Required(CONF_INCLUDE_PAST_HOURS, default=include_past): vol.All(int, vol.Clamp(min=0, max=72)),
-                vol.Required(CONF_MAX_FLIGHTS, default=max_flights): vol.All(int, vol.Clamp(min=1, max=200)),
-                vol.Required(CONF_MERGE_TOLERANCE_HOURS, default=tolerance): vol.All(int, vol.Clamp(min=0, max=48)),
-                vol.Optional(CONF_AUTO_PRUNE_LANDED, default=auto_prune): bool,
-                vol.Optional(CONF_PRUNE_LANDED_HOURS, default=prune_hours): vol.All(int, vol.Clamp(min=0, max=168)),
+                vol.Required(CONF_DAYS_AHEAD, default=days_ahead): vol.All(int, vol.Clamp(min=1, max=365)),
+            }
+        )
+
+        # Data & caching
+        schema_dict.update(
+            {
                 vol.Optional(CONF_CACHE_DIRECTORY, default=cache_dir): bool,
                 vol.Optional(CONF_CACHE_TTL_DAYS, default=cache_ttl_days): vol.All(int, vol.Clamp(min=1, max=3650)),
             }
         )
+
+        # Pruning / cleanup
+        schema_dict.update(
+            {
+                vol.Optional(CONF_AUTO_PRUNE_LANDED, default=auto_prune): bool,
+                vol.Optional(CONF_PRUNE_LANDED_HOURS, default=prune_hours): vol.All(int, vol.Clamp(min=0, max=168)),
+            }
+        )
+
+        # Advanced list behavior
+        schema_dict.update(
+            {
+                vol.Required(CONF_MAX_FLIGHTS, default=max_flights): vol.All(int, vol.Clamp(min=1, max=200)),
+                vol.Required(CONF_MERGE_TOLERANCE_HOURS, default=tolerance): vol.All(int, vol.Clamp(min=0, max=48)),
+            }
+        )
+
+        schema = vol.Schema(schema_dict)
 
         return self.async_show_form(step_id="init", data_schema=schema)
 
@@ -286,11 +330,6 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
             try:
                 await self.hass.async_add_executor_job(_test)
             except Exception:
-                self.hass.components.persistent_notification.create(
-                    title="TripIt connection test failed",
-                    message="TripIt authorization succeeded, but the connection test failed. Try again.",
-                    notification_id="flight_dashboard_tripit_oauth",
-                )
                 return self.async_show_form(
                     step_id="tripit_verifier",
                     data_schema=vol.Schema({vol.Required(CONF_TRIPIT_VERIFIER): str}),
@@ -299,12 +338,6 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
 
             self._pending_options[CONF_TRIPIT_ACCESS_TOKEN] = access.oauth_token
             self._pending_options[CONF_TRIPIT_ACCESS_TOKEN_SECRET] = access.oauth_token_secret
-
-            self.hass.components.persistent_notification.create(
-                title="TripIt connected",
-                message="✅ TripIt authorization succeeded and connection test passed.",
-                notification_id="flight_dashboard_tripit_oauth",
-            )
 
             return self.async_create_entry(title="", data=self._pending_options)
 
@@ -325,17 +358,6 @@ class FlightDashboardOptionsFlowHandler(config_entries.OptionsFlow):
                 data_schema=vol.Schema({vol.Required(CONF_TRIPIT_VERIFIER): str}),
                 errors={"base": "tripit_request_token_failed"},
             )
-
-        self.hass.components.persistent_notification.create(
-            title="TripIt authorization required",
-            message=(
-                "1) Open this URL and approve access in TripIt:\n\n"
-                f"{self._tripit_request_token.authorize_url}\n\n"
-                "2) TripIt will show a PIN / verifier.\n"
-                "3) Return to Home Assistant and paste it into the verifier field."
-            ),
-            notification_id="flight_dashboard_tripit_oauth",
-        )
 
         return self.async_show_form(
             step_id="tripit_verifier",

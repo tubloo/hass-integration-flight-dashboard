@@ -146,6 +146,7 @@ All configuration is done via the UI (config flow).
 Key points:
 - **Schedule provider** is used for preview/add (must return scheduled times).
 - **Status provider** is used for live status updates.
+- **Position provider** controls live map location updates (default: same as status).
 - FR24 is great for status, but does not always return scheduled times. Use AirLabs or Aviationstack for schedule.
 - FR24 sandbox: enable **Use FR24 sandbox** and set the sandbox key.
 - **Auto-remove landed flights** is optional and applies only to manual flights.
@@ -177,6 +178,12 @@ Logic:
   - delayed if departure_delay > grace
   - otherwise on_time
 - If no sched/est/act → `unknown`
+
+### Merge Tolerance
+When the integration sees multiple records that look like the same flight, it
+uses **Merge tolerance (hours)** to decide whether to combine them. If two
+records share airline + flight number + route and their scheduled times are
+within the tolerance window, they are merged to avoid duplicates. Default: **6 hours**.
 
 ### Supported providers
 **Schedule provider**

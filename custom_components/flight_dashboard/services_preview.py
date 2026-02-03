@@ -24,7 +24,6 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.components import persistent_notification
 
 from .const import (
     DOMAIN,
@@ -360,13 +359,6 @@ async def async_register_preview_services(
             preview["ready"] = ready
             preview["error"] = None if ready else "incomplete"
             preview["hint"] = None if ready else hint
-            if not ready and hint:
-                persistent_notification.async_create(
-                    hass,
-                    hint,
-                    title="Flight Dashboard — Preview incomplete",
-                    notification_id="flight_dashboard_preview_incomplete",
-                )
             # Warn (but allow add) if logo is missing
             if ready:
                 f = preview.get("flight") or {}
@@ -374,12 +366,6 @@ async def async_register_preview_services(
                     f["airline_logo_url"] = airline_logo_url(airline)
                 if not f.get("airline_logo_url"):
                     preview["warning"] = "Airline logo not available."
-                    persistent_notification.async_create(
-                        hass,
-                        "Airline logo not available for this flight.",
-                        title="Flight Dashboard — Preview warning",
-                        notification_id="flight_dashboard_preview_warning",
-                    )
                 # Warn if city is missing but allow add
                 dep_air = ((f.get("dep") or {}).get("airport") or {})
                 arr_air = ((f.get("arr") or {}).get("airport") or {})
@@ -391,83 +377,35 @@ async def async_register_preview_services(
                 if missing_details:
                     msg = "Airport details missing for: " + ", ".join(missing_details)
                     preview["warning"] = (preview.get("warning") + " " if preview.get("warning") else "") + msg
-                    persistent_notification.async_create(
-                        hass,
-                        msg,
-                        title="Flight Dashboard — Preview warning",
-                        notification_id="flight_dashboard_preview_airport_missing",
-                    )
         else:
             preview["flight"] = flight
             preview["ready"] = False
             preview["error"] = err or "no_match_or_no_provider"
             preview["hint"] = hint or "Either no match was found for that date, or no provider API is configured/available."
-            persistent_notification.async_create(
-                hass,
-                preview["hint"],
-                title="Flight Dashboard — Preview incomplete",
-                notification_id="flight_dashboard_preview_incomplete",
-            )
 
         await async_save_preview(hass, preview)
         async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
-        persistent_notification.async_create(
-            hass,
-            f"{airline} {flight_number} on {date_str} (ready={preview['ready']})",
-            title="Flight Dashboard — Preview updated",
-            notification_id="flight_dashboard_preview_updated",
-        )
 
     async def _svc_confirm(call: ServiceCall) -> None:
         """Persist the current preview as a manual flight."""
         preview = await async_load_preview(hass)
         if not (preview or {}).get("ready"):
-            persistent_notification.async_create(
-                hass,
-                "Preview is incomplete. Run Preview again or check provider configuration.",
-                title="Flight Dashboard — Add failed",
-                notification_id="flight_dashboard_add_failed",
-            )
             return
         f = (preview or {}).get("flight")
         if not isinstance(f, dict):
-            persistent_notification.async_create(
-                hass,
-                "No preview available. Run Preview first.",
-                title="Flight Dashboard — Add failed",
-                notification_id="flight_dashboard_add_failed",
-            )
             return
 
         try:
             flight_key = await async_add_manual_flight_record(hass, f)
-            persistent_notification.async_create(
-                hass,
-                f"Saved {f.get('airline_code')} {f.get('flight_number')} (key: {flight_key})",
-                title="Flight Dashboard — Added",
-                notification_id="flight_dashboard_added",
-            )
             await async_clear_preview(hass)
             async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
         except Exception as e:
             _LOGGER.exception("Confirm add failed")
-            persistent_notification.async_create(
-                hass,
-                str(e),
-                title="Flight Dashboard — Add failed",
-                notification_id="flight_dashboard_add_failed",
-            )
 
     async def _svc_clear(call: ServiceCall) -> None:
         """Clear any stored preview."""
         await async_clear_preview(hass)
         async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
-        persistent_notification.async_create(
-            hass,
-            "Preview cleared.",
-            title="Flight Dashboard — Preview cleared",
-            notification_id="flight_dashboard_preview_cleared",
-        )
 
     async def _svc_add_flight(call: ServiceCall) -> None:
         """Add a flight directly from minimal inputs without preview."""
@@ -483,20 +421,8 @@ async def async_register_preview_services(
         notes = str(call.data.get("notes", "")).strip() or None
 
         if not date_str:
-            persistent_notification.async_create(
-                hass,
-                "Provide a date in YYYY-MM-DD.",
-                title="Flight Dashboard — Add failed",
-                notification_id="flight_dashboard_add_failed",
-            )
             return
         if not airline or not flight_number:
-            persistent_notification.async_create(
-                hass,
-                "Provide airline + flight_number or a query like 'AI 157'.",
-                title="Flight Dashboard — Add failed",
-                notification_id="flight_dashboard_add_failed",
-            )
             return
 
         result = await lookup_schedule(
@@ -512,30 +438,12 @@ async def async_register_preview_services(
             flight["notes"] = notes
             try:
                 flight_key = await async_add_manual_flight_record(hass, flight)
-                persistent_notification.async_create(
-                    hass,
-                    f"Saved {airline} {flight_number} (key: {flight_key})",
-                    title="Flight Dashboard — Added",
-                    notification_id="flight_dashboard_added",
-                )
                 return
             except Exception as e:
                 _LOGGER.exception("Add flight failed")
-                persistent_notification.async_create(
-                    hass,
-                    str(e),
-                    title="Flight Dashboard — Add failed",
-                    notification_id="flight_dashboard_add_failed",
-                )
                 return
 
         hint = result.get("hint") if isinstance(result, dict) else None
-        persistent_notification.async_create(
-            hass,
-            hint or "No match found or no provider configured.",
-            title="Flight Dashboard — Add failed",
-            notification_id="flight_dashboard_add_failed",
-        )
 
     hass.services.async_register(DOMAIN, SERVICE_PREVIEW_FLIGHT, _svc_preview, schema=SERVICE_SCHEMA_PREVIEW)
     hass.services.async_register(DOMAIN, SERVICE_CONFIRM_ADD, _svc_confirm)

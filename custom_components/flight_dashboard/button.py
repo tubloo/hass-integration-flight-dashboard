@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import logging
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
@@ -18,14 +19,11 @@ from .manual_store import async_add_manual_flight_record
 SELECT_ENTITY_ID = "select.flight_dashboard_remove_flight"
 UPCOMING_SENSOR = "sensor.flight_dashboard_upcoming_flights"
 
+_LOGGER = logging.getLogger(__name__)
 
-async def _notify(hass: HomeAssistant, title: str, message: str) -> None:
-    await hass.services.async_call(
-        "persistent_notification",
-        "create",
-        {"title": title, "message": message, "notification_id": "flight_dashboard"},
-        blocking=True,
-    )
+
+async def _notify(_hass: HomeAssistant, title: str, message: str) -> None:
+    _LOGGER.info("%s: %s", title, message)
 
 
 def _extract_flight_key(selected: str) -> str:

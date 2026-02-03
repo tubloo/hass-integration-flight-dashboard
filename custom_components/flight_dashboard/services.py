@@ -20,7 +20,6 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
-from homeassistant.components.persistent_notification import async_create as notify
 
 from .const import (
     DOMAIN,
@@ -91,28 +90,27 @@ async def async_register_services(hass: HomeAssistant, _options_provider: Any | 
             )
         except Exception as e:
             _LOGGER.exception("Add manual flight failed: %s", e)
-            notify(hass, f"Add manual flight failed: {e}", title="Flight Dashboard — Error")
             return
 
-        notify(hass, f"Flight added: {flight_key}", title="Flight Dashboard — Saved ✅")
+        _LOGGER.info("Flight added: %s", flight_key)
 
     async def _remove(call: ServiceCall) -> None:
         data = REMOVE_SCHEMA(dict(call.data))
         ok = await async_remove_manual_flight(hass, data["flight_key"])
         if ok:
-            notify(hass, f"Removed: {data['flight_key']}", title="Flight Dashboard — Removed")
+            _LOGGER.info("Removed: %s", data["flight_key"])
         else:
-            notify(hass, f"Not found: {data['flight_key']}", title="Flight Dashboard — Remove")
+            _LOGGER.info("Not found: %s", data["flight_key"])
 
     async def _clear(call: ServiceCall) -> None:
         _ = CLEAR_SCHEMA(dict(call.data))
         n = await async_clear_manual_flights(hass)
-        notify(hass, f"Cleared {n} manual flights", title="Flight Dashboard — Cleared")
+        _LOGGER.info("Cleared %s manual flights", n)
 
     async def _refresh(call: ServiceCall) -> None:
         _ = REFRESH_SCHEMA(dict(call.data))
         async_dispatcher_send(hass, SIGNAL_MANUAL_FLIGHTS_UPDATED)
-        notify(hass, "Refresh triggered", title="Flight Dashboard — Refresh")
+        _LOGGER.info("Refresh triggered")
 
     async def _prune(call: ServiceCall) -> None:
         data = PRUNE_SCHEMA(dict(call.data))
@@ -142,6 +140,7 @@ async def async_register_services(hass: HomeAssistant, _options_provider: Any | 
                     removed += 1
 
         notify(hass, f"Removed {removed} landed flights", title="Flight Dashboard — Pruned")
+        _LOGGER.info("Removed %s landed flights", removed)
 
     hass.services.async_register(DOMAIN, SERVICE_ADD_MANUAL_FLIGHT, _add, schema=ADD_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_REMOVE_MANUAL_FLIGHT, _remove, schema=REMOVE_SCHEMA)
