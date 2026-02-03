@@ -44,6 +44,8 @@ Per flight:
 - airline_logo_url (optional), aircraft_type (optional)
 - delay_status (on_time|delayed|cancelled|arrived|unknown)
 - delay_minutes (minutes vs sched; arrival preferred if available)
+- duration_scheduled_minutes / duration_estimated_minutes / duration_actual_minutes
+- duration_minutes (best available: actual → estimated → scheduled)
 """.strip()
 
 SCHEMA_EXAMPLE: dict[str, Any] = {
@@ -56,6 +58,10 @@ SCHEMA_EXAMPLE: dict[str, Any] = {
     "status_state": "scheduled",
     "delay_status": "on_time",
     "delay_minutes": 0,
+    "duration_scheduled_minutes": 295,
+    "duration_estimated_minutes": None,
+    "duration_actual_minutes": None,
+    "duration_minutes": 295,
     "dep": {"airport": {"iata": "DEL", "tz": "Asia/Kolkata", "tz_short": "IST", "city": "Delhi"}, "scheduled": "2026-01-30T14:00:00+00:00"},
     "arr": {"airport": {"iata": "CPH", "tz": "Europe/Copenhagen", "tz_short": "CET", "city": "Copenhagen"}, "scheduled": "2026-01-30T18:55:00+00:00"},
 }
@@ -328,6 +334,7 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
                 "dep_local_hm_new","dep_local_hm_sched","dep_viewer_hm_new","dep_viewer_hm_sched",
                 "arr_local_hm_new","arr_local_hm_sched","arr_viewer_hm_new","arr_viewer_hm_sched",
                 "delay_minutes","gate_dep","gate_arr","terminal_dep","terminal_arr",
+                "scheduled_departure","scheduled_arrival",
             ):
                 flight.pop(legacy, None)
 

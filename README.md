@@ -35,7 +35,7 @@ homeassistant:
   packages: !include_dir_named packages
 ```
 
-2) Copy the package file:
+2) Copy the package file from this repo to your HA config:
 ```
 /config/packages/flight_dashboard_add_flow.yaml
 ```
@@ -62,6 +62,7 @@ If you prefer the UI instead of packages:
 2. Create these:
    - **Text**: `input_text.fd_airline`
    - **Text**: `input_text.fd_flight_number`
+   - **Text**: `input_text.fd_dep_airport` (optional)
    - **Text**: `input_text.fd_travellers`
    - **Text**: `input_text.fd_notes`
    - **Date & Time**: `input_datetime.fd_flight_date`
@@ -133,12 +134,7 @@ You can add flights with minimal inputs (airline code, flight number, date) and 
 - On-demand refresh button/service.
 - Schedule provider and status provider can be set independently.
 - Optional auto-removal of landed/cancelled manual flights.
-- Optional airport/airline directory cache (default 90 days).
-
-## Installation (Manual)
-1. Copy `custom_components/flight_dashboard` into your Home Assistant `config/custom_components/` directory.
-2. Restart Home Assistant.
-3. Add the integration from **Settings → Devices & Services**.
+- Optional airport/airline directory cache (default 180 days).
 
 ## Configuration
 All configuration is done via the UI (config flow).
@@ -165,6 +161,39 @@ dep_airport
 ### Delay Status Logic
 Computed field: `delay_status` (on_time | delayed | cancelled | arrived | unknown)  
 Computed field: `delay_minutes` (minutes vs sched; arrival preferred if available)
+Computed fields: `duration_scheduled_minutes`, `duration_estimated_minutes`, `duration_actual_minutes`  
+Computed field: `duration_minutes` (best available: actual → estimated → scheduled)
+
+### Provider Status Mapping
+Raw provider status is preserved as:
+- `status.provider_state` (inside `status`)
+
+Normalized status is:
+- `status_state` (used by UI & logic)
+
+Normalization rules:
+- FlightAPI: `Scheduled` → `scheduled`, `In Air` / `Departed` → `active`, `Landed` → `landed`, `Cancelled` → `cancelled`
+- FR24: `scheduled` / `active` / `landed` / `canceled` mapped directly
+- Aviationstack / AirLabs: provider state mapped to `status_state` (unknown if missing)
+
+### Canonical Fields (What They Mean)
+Top‑level:
+- `status_state`: normalized state (scheduled | active | landed | cancelled | unknown)
+- `delay_status`: computed on_time | delayed | cancelled | arrived | unknown
+- `delay_minutes`: minutes late/early vs schedule (arrival preferred)
+- `duration_*_minutes`: computed durations from dep/arr timestamps
+
+Per‑leg:
+- `dep.scheduled/estimated/actual`: UTC ISO timestamps for departure
+- `arr.scheduled/estimated/actual`: UTC ISO timestamps for arrival
+- `dep.scheduled_local/estimated_local/actual_local`: airport‑local timestamps
+- `arr.scheduled_local/estimated_local/actual_local`: airport‑local timestamps
+- `dep.airport/arr.airport`: name, city, iata, tz, tz_short
+
+Provider block:
+- `status.provider`: provider name
+- `status.provider_state`: raw status from provider
+> `status` is a normalized subset of provider fields, not the full raw response.
 
 Logic:
 - If status_state == cancelled → `cancelled`

@@ -76,12 +76,49 @@ def _normalize_iso_in_tz(val: str | None, tzname: str | None) -> str | None:
     return dt_util.as_utc(dt).isoformat()
 
 
+def _normalize_status_state(provider_state: str | None, provider: str | None) -> str:
+    if not provider_state:
+        return "unknown"
+    raw = str(provider_state).strip()
+    if not raw:
+        return "unknown"
+    s = raw.lower()
+
+    # Generic mappings
+    if s in ("scheduled", "schedule", "plan", "planned"):
+        return "scheduled"
+    if s in ("active", "enroute", "en route", "in air", "in-air", "airborne", "departed", "cruising"):
+        return "active"
+    if s in ("landed", "arrived", "arrival", "arrived_gate"):
+        return "landed"
+    if s in ("cancelled", "canceled"):
+        return "cancelled"
+    if s in ("diverted",):
+        return "active"
+    if s in ("unknown", "n/a", "na"):
+        return "unknown"
+
+    # Provider-specific nuances (if needed)
+    if (provider or "").lower() == "opensky":
+        return "active"
+
+    return "unknown"
+
+
 def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[str, Any]:
     """Apply normalized status dict onto a canonical flight dict."""
     if not status:
         return flight
 
-    flight["status_state"] = status.get("state") or flight.get("status_state") or "unknown"
+    provider_state = status.get("provider_state") or status.get("state")
+    provider = status.get("provider")
+    if provider_state:
+        status["provider_state"] = provider_state
+    # Avoid duplicate fields
+    status.pop("state", None)
+    flight.pop("status_provider_state", None)
+
+    flight["status_state"] = _normalize_status_state(provider_state, provider) or flight.get("status_state") or "unknown"
 
     dep = flight.setdefault("dep", {})
     arr = flight.setdefault("arr", {})
@@ -111,8 +148,10 @@ def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[
         arr["gate"] = status.get("gate_arr")
 
     # optional airline/airport identity enrichment
+    # Keep airline name only at flight level to avoid duplication
     if status.get("airline_name") and not flight.get("airline_name"):
         flight["airline_name"] = status.get("airline_name")
+    status.pop("airline_name", None)
     if status.get("airline_logo_url") and not flight.get("airline_logo_url"):
         flight["airline_logo_url"] = status.get("airline_logo_url")
 

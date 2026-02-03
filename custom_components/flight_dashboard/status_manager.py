@@ -103,6 +103,42 @@ def _compute_delay_status(flight: dict[str, Any], grace_minutes: int) -> tuple[s
     return "on_time", minutes
 
 
+def _duration_minutes(dep_dt: datetime | None, arr_dt: datetime | None) -> int | None:
+    if not dep_dt or not arr_dt:
+        return None
+    dep_utc = dt_util.as_utc(dep_dt) if dep_dt.tzinfo else dt_util.as_utc(dt_util.as_local(dep_dt))
+    arr_utc = dt_util.as_utc(arr_dt) if arr_dt.tzinfo else dt_util.as_utc(dt_util.as_local(arr_dt))
+    delta = (arr_utc - dep_utc).total_seconds() / 60.0
+    if delta < 0:
+        return None
+    return int(round(delta))
+
+
+def _compute_durations(flight: dict[str, Any]) -> dict[str, int | None]:
+    dep = flight.get("dep") or {}
+    arr = flight.get("arr") or {}
+
+    dep_sched = _parse_dt(dep.get("scheduled"))
+    arr_sched = _parse_dt(arr.get("scheduled"))
+    dep_est = _parse_dt(dep.get("actual") or dep.get("estimated"))
+    arr_est = _parse_dt(arr.get("actual") or arr.get("estimated"))
+    dep_act = _parse_dt(dep.get("actual"))
+    arr_act = _parse_dt(arr.get("actual"))
+
+    scheduled = _duration_minutes(dep_sched, arr_sched)
+    estimated = _duration_minutes(dep_est, arr_est)
+    actual = _duration_minutes(dep_act, arr_act)
+
+    best = actual if actual is not None else (estimated if estimated is not None else scheduled)
+
+    return {
+        "duration_scheduled_minutes": scheduled,
+        "duration_estimated_minutes": estimated,
+        "duration_actual_minutes": actual,
+        "duration_minutes": best,
+    }
+
+
 def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minutes: int) -> int | None:
     """Compute next refresh interval in seconds.
 
@@ -426,6 +462,7 @@ async def async_update_statuses(
         delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
         f["delay_status"] = delay_state
         f["delay_minutes"] = delay_minutes
+        f.update(_compute_durations(f))
 
     # Determine which flights are due
     due: list[dict[str, Any]] = []
@@ -492,6 +529,7 @@ async def async_update_statuses(
         delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
         f["delay_status"] = delay_state
         f["delay_minutes"] = delay_minutes
+        f.update(_compute_durations(f))
         # Compute next refresh time
         refresh_seconds = compute_next_refresh_seconds(f, now, ttl_minutes)
         if refresh_seconds is None:
