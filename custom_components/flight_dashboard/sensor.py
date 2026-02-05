@@ -22,7 +22,7 @@ from .providers.itinerary.manual import ManualItineraryProvider
 from .manual_store import async_remove_manual_flight, async_update_manual_flight
 from .status_manager import async_update_statuses
 from .tz_short import tz_short_name
-from .directory import get_airport, get_airline, warm_directory_cache
+from .directory import get_airport, get_airline, warm_directory_cache, async_get_openflights_airport
 from .fr24_client import FR24Client, FR24RateLimitError, FR24Error
 from .rate_limit import get_blocks, is_blocked, get_block_until, get_block_reason, set_block
 from .selected import get_selected_flight, get_flight_position
@@ -42,10 +42,13 @@ Per flight:
 - dep.airport.tz + tz_short
 - arr.airport.tz + tz_short
 - airline_logo_url (optional), aircraft_type (optional)
-- delay_status (on_time|delayed|cancelled|arrived|unknown)
+- delay_status (On Time|Delayed|Cancelled|Unknown)
+- delay_status_key (on_time|delayed|cancelled|unknown)
 - delay_minutes (minutes vs sched; arrival preferred if available)
 - duration_scheduled_minutes / duration_estimated_minutes / duration_actual_minutes
 - duration_minutes (best available: actual → estimated → scheduled)
+- diverted_to_iata (optional, only when status_state=Diverted)
+- diverted_to_airport (optional, only when status_state=Diverted)
 """.strip()
 
 SCHEMA_EXAMPLE: dict[str, Any] = {
@@ -55,8 +58,8 @@ SCHEMA_EXAMPLE: dict[str, Any] = {
     "flight_number": "157",
     "aircraft_type": "B788",
     "travellers": ["Sumit", "Parul"],
-    "status_state": "scheduled",
-    "delay_status": "on_time",
+    "status_state": "Scheduled",
+    "delay_status": "On Time",
     "delay_minutes": 0,
     "duration_scheduled_minutes": 295,
     "duration_estimated_minutes": None,
@@ -215,17 +218,15 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
         flights, next_refresh = await async_update_statuses(self.hass, options, flights)
 
-        # Optional: auto-remove landed/cancelled manual flights after arrival
+        # Optional: auto-remove arrived/cancelled flights after arrival time
         if auto_prune:
             cutoff = now - timedelta(hours=prune_hours)
             removed_any = False
             for f in flights:
                 if not isinstance(f, dict):
                     continue
-                if (f.get("source") or "manual") != "manual":
-                    continue
                 status = (f.get("status_state") or "").lower()
-                if status not in ("landed", "cancelled"):
+                if status not in ("arrived", "cancelled"):
                     continue
                 arr = (f.get("arr") or {})
                 arr_time = arr.get("actual") or arr.get("estimated") or arr.get("scheduled")
@@ -264,6 +265,8 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
             updates: dict[str, Any] = {}
             if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
                 airport = await get_airport(self.hass, options, dep_air.get("iata"))
+                if not airport:
+                    airport = await async_get_openflights_airport(self.hass, dep_air.get("iata"))
                 if airport:
                     if not dep_air.get("name") and airport.get("name"):
                         dep_air["name"] = airport.get("name")
@@ -277,6 +280,8 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
             if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
                 airport = await get_airport(self.hass, options, arr_air.get("iata"))
+                if not airport:
+                    airport = await async_get_openflights_airport(self.hass, arr_air.get("iata"))
                 if airport:
                     if not arr_air.get("name") and airport.get("name"):
                         arr_air["name"] = airport.get("name")
@@ -340,6 +345,8 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
         self._flights = flights
         self.async_write_ha_state()
+        # Notify selects/binary sensors even if state didn't change
+        self.hass.bus.async_fire(EVENT_UPDATED)
 
         if next_refresh:
             @callback

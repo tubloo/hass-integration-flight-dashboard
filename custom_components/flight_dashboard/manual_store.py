@@ -21,6 +21,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SIGNAL_MANUAL_FLIGHTS_UPDATED
+from .status_resolver import _normalize_status_state
 
 _STORE_KEY = f"{DOMAIN}.manual_flights"
 _STORE_VERSION = 1
@@ -86,13 +87,55 @@ async def _store(hass: HomeAssistant) -> Store:
     return Store(hass, _STORE_VERSION, _STORE_KEY)
 
 
+def _normalize_delay_status(val: Any) -> str | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    raw = s.lower().replace(" ", "_")
+    if raw in ("on_time", "ontime"):
+        return "On Time"
+    if raw in ("delayed", "delay"):
+        return "Delayed"
+    if raw in ("cancelled", "canceled"):
+        return "Cancelled"
+    if raw in ("arrived", "landed"):
+        return "Arrived"
+    if raw in ("unknown", "n/a", "na"):
+        return "Unknown"
+    return " ".join(w.capitalize() for w in raw.split("_"))
+
+
 async def async_list_manual_flights(hass: HomeAssistant) -> list[dict[str, Any]]:
     st = await _store(hass)
     data = await st.async_load() or {}
     flights = data.get("flights") or []
-    if isinstance(flights, list):
-        return flights
-    return []
+    if not isinstance(flights, list):
+        return []
+
+    # One-time migration: normalize stored status strings to Title Case.
+    changed = False
+    for f in flights:
+        if not isinstance(f, dict):
+            continue
+        status_state = f.get("status_state")
+        norm_state = _normalize_status_state(status_state, None)
+        if status_state != norm_state:
+            f["status_state"] = norm_state
+            changed = True
+
+        delay_status = f.get("delay_status")
+        norm_delay = _normalize_delay_status(delay_status)
+        if norm_delay and delay_status != norm_delay:
+            f["delay_status"] = norm_delay
+            changed = True
+
+    if changed:
+        await st.async_save({"flights": flights})
+        async_dispatcher_send(hass, SIGNAL_MANUAL_FLIGHTS_UPDATED)
+
+    return flights
 
 
 async def async_save_manual_flights(hass: HomeAssistant, flights: list[dict[str, Any]]) -> None:

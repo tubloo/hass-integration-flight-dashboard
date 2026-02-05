@@ -37,7 +37,7 @@ class MockStatusProvider:
 
         details = {
             "provider": "mock",
-            "state": rec.get("status_state") or "scheduled",
+            "state": rec.get("status_state") or "Scheduled",
             "dep_scheduled": (rec.get("dep") or {}).get("scheduled"),
             "arr_scheduled": (rec.get("arr") or {}).get("scheduled"),
             "dep_estimated": (rec.get("dep") or {}).get("estimated"),

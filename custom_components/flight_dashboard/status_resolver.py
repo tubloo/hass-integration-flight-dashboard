@@ -78,31 +78,31 @@ def _normalize_iso_in_tz(val: str | None, tzname: str | None) -> str | None:
 
 def _normalize_status_state(provider_state: str | None, provider: str | None) -> str:
     if not provider_state:
-        return "unknown"
+        return "Unknown"
     raw = str(provider_state).strip()
     if not raw:
-        return "unknown"
+        return "Unknown"
     s = raw.lower()
 
-    # Generic mappings
+    # Generic mappings (canonical set for UI)
     if s in ("scheduled", "schedule", "plan", "planned"):
-        return "scheduled"
-    if s in ("active", "enroute", "en route", "in air", "in-air", "airborne", "departed", "cruising"):
-        return "active"
+        return "Scheduled"
+    if s in ("active", "enroute", "en route", "en-route", "in air", "in-air", "airborne", "departed", "cruising"):
+        return "En Route"
     if s in ("landed", "arrived", "arrival", "arrived_gate"):
-        return "landed"
+        return "Arrived"
     if s in ("cancelled", "canceled"):
-        return "cancelled"
+        return "Cancelled"
     if s in ("diverted",):
-        return "active"
+        return "Diverted"
     if s in ("unknown", "n/a", "na"):
-        return "unknown"
+        return "Unknown"
 
     # Provider-specific nuances (if needed)
     if (provider or "").lower() == "opensky":
-        return "active"
+        return "En Route"
 
-    return "unknown"
+    return "Unknown"
 
 
 def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[str, Any]:
@@ -118,7 +118,17 @@ def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[
     status.pop("state", None)
     flight.pop("status_provider_state", None)
 
-    flight["status_state"] = _normalize_status_state(provider_state, provider) or flight.get("status_state") or "unknown"
+    prev_state = flight.get("status_state") or "Unknown"
+    normalized_state = _normalize_status_state(provider_state, provider) or "Unknown"
+    # If provider yields unknown (or no state) but we already have a meaningful state,
+    # keep the existing state to avoid flipping to Unknown on transient errors.
+    if normalized_state == "Unknown" and prev_state != "Unknown":
+        if not provider_state or str(provider_state).strip().lower() in ("unknown", "n/a", "na"):
+            flight["status_state"] = prev_state
+        else:
+            flight["status_state"] = normalized_state
+    else:
+        flight["status_state"] = normalized_state
 
     dep = flight.setdefault("dep", {})
     arr = flight.setdefault("arr", {})
@@ -166,6 +176,28 @@ def apply_status(flight: dict[str, Any], status: dict[str, Any] | None) -> dict[
 
     if status.get("position"):
         flight["position"] = status.get("position")
+
+    # Diverted destination (only when status is Diverted and provider arrival differs)
+    try:
+        orig_arr_iata = (arr_air.get("iata") or "").strip().upper()
+        status_arr_iata = (status.get("arr_iata") or status.get("arr_airport_iata") or "").strip().upper()
+        if flight.get("status_state") == "Diverted" and status_arr_iata and status_arr_iata != orig_arr_iata:
+            flight["diverted_to_iata"] = status_arr_iata
+            diverted_airport = {
+                "iata": status_arr_iata,
+                "name": status.get("arr_airport_name"),
+                "city": status.get("arr_airport_city"),
+                "tz": status.get("arr_tz"),
+                "tz_short": status.get("arr_tz_short"),
+            }
+            # prune empty keys
+            flight["diverted_to_airport"] = {k: v for k, v in diverted_airport.items() if v}
+        else:
+            flight.pop("diverted_to_iata", None)
+            flight.pop("diverted_to_airport", None)
+    except Exception:
+        # Never fail status application due to diverted handling
+        pass
 
     # aircraft type (provider-agnostic mapping)
     # Accept a few common keys so different providers can normalize into this resolver:

@@ -133,8 +133,12 @@ def _pick_parts(payload: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | N
             arr = item.get("arrival")
         if not aircraft and isinstance(item.get("aircraft"), dict):
             aircraft = item.get("aircraft")
-        if not status and isinstance(item.get("status"), dict):
-            status = item.get("status")
+        if not status and "status" in item:
+            st = item.get("status")
+            if isinstance(st, dict):
+                status = st
+            elif isinstance(st, str):
+                status = {"status": st}
         if dep and arr and aircraft and status:
             break
     return dep, arr, aircraft, status

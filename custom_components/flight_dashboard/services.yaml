@@ -72,8 +72,8 @@ refresh_now:
   fields: {}
 
 prune_landed:
-  name: Remove landed flights
-  description: Remove landed/cancelled manual flights. Optional hours delay after arrival.
+  name: Remove past flights
+  description: Remove manual flights whose arrival time is older than the cutoff. Optional hours delay after arrival.
   fields:
     hours:
       required: false

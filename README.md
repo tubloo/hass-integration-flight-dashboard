@@ -93,7 +93,7 @@ These Lovelace examples use the following custom cards:
 **Required for the examples below**
 - **Mushroom** cards (`custom:mushroom-*`)
 - **auto-entities** (`custom:auto-entities`)
-- **map-card** (`custom:map-card`)
+- **tailwindcss-template-card** (`custom:tailwindcss-template-card`)
 
 If you don’t have these, install them via HACS → Frontend, then restart HA.
 
@@ -120,13 +120,46 @@ The Add Flight card expects these helpers/scripts to exist. Use the provided
 2) **Install required frontend cards** (via HACS → Frontend)  
    - Mushroom  
    - auto‑entities  
-   - map-card
+   - tailwindcss‑template‑card
 
 3) **Create helpers + scripts**  
    Use the **Setup Package** above or create them in UI.
 
 4) **Add Lovelace dashboards/cards**  
    Copy the Flight Status and Manage Flights dashboards from the examples below.
+
+## Uninstall / Cleanup
+
+Use this if you want to fully remove the integration and its data.
+
+1) **Remove the integration**
+   - Settings → Devices & Services → Flight Dashboard → Remove
+
+2) **Remove the custom component files**
+   - Delete `/config/custom_components/flight_dashboard/`
+
+3) **Remove helpers & scripts (if you used the package)**
+   - Delete `/config/packages/flight_dashboard_add_flow.yaml`
+   - Restart Home Assistant
+   - Or delete the helpers/scripts manually in UI (Helpers / Scripts)
+
+4) **Remove stored data (manual flights, preview, directory cache)**
+   - Delete the following files from `/config/.storage/`:
+     - `flight_dashboard.manual_flights`
+     - `flight_dashboard.preview`
+     - `flight_dashboard.directory_cache`
+   - Restart Home Assistant
+
+5) **Remove Lovelace resources / custom cards (optional)**
+   - If you installed custom cards only for this integration, uninstall via HACS → Frontend:
+     - Mushroom
+     - auto‑entities
+     - tailwindcss-template-card
+     - button-card (if used)
+   - Also remove any Lovelace resources if you added them manually.
+
+6) **Remove dashboards/cards**
+   - Delete any dashboards/cards you added for Flight Dashboard.
 
 ## Status Refresh Policy
 
@@ -142,7 +175,7 @@ You can add flights with minimal inputs (airline code, flight number, date) and 
 - Manual flights are editable; provider-sourced flights are read-only.
 - On-demand refresh button/service.
 - Schedule provider and status provider can be set independently.
-- Optional auto-removal of landed/cancelled manual flights.
+- Optional auto-removal of arrived/cancelled manual flights.
 - Optional airport/airline directory cache (default 180 days).
 
 ## Configuration
@@ -154,7 +187,7 @@ Key points:
 - **Position provider** controls live map location updates (default: same as status).
 - FR24 is great for status, but does not always return scheduled times. Use AirLabs or Aviationstack for schedule.
 - FR24 sandbox: enable **Use FR24 sandbox** and set the sandbox key.
-- **Auto-remove landed flights** is optional and applies only to manual flights.
+- **Auto-remove past flights** removes flights whose arrival time is older than the cutoff.
 - **Delay grace (minutes)** controls when a flight is considered delayed (default 10 min).
 - **Preview displays scheduled times only** (est/act appear after the flight is added).
 
@@ -168,7 +201,8 @@ dep_airport
 ```
 
 ### Delay Status Logic
-Computed field: `delay_status` (on_time | delayed | cancelled | arrived | unknown)  
+Computed field: `delay_status` (on_time | delayed | cancelled | unknown)  
+Computed field: `delay_status_key` (normalized snake_case, e.g. on_time, delayed)  
 Computed field: `delay_minutes` (minutes vs sched; arrival preferred if available)
 Computed fields: `duration_scheduled_minutes`, `duration_estimated_minutes`, `duration_actual_minutes`  
 Computed field: `duration_minutes` (best available: actual → estimated → scheduled)
@@ -181,14 +215,25 @@ Normalized status is:
 - `status_state` (used by UI & logic)
 
 Normalization rules:
-- FlightAPI: `Scheduled` → `scheduled`, `In Air` / `Departed` → `active`, `Landed` → `landed`, `Cancelled` → `cancelled`
-- FR24: `scheduled` / `active` / `landed` / `canceled` mapped directly
+- FlightAPI: `Scheduled` → `Scheduled`, `In Air` / `Departed` → `En Route`, `Landed` → `Arrived`, `Cancelled` → `Cancelled`
+- FR24: `scheduled` / `active` / `landed` / `canceled` mapped to `Scheduled` / `En Route` / `Arrived` / `Cancelled`
 - Aviationstack / AirLabs: provider state mapped to `status_state` (unknown if missing)
+
+### Provider Time Normalization
+Providers are inconsistent about timezone handling:
+- Some return **UTC with offsets** (authoritative).
+- Some return **local airport time without TZ** (naive strings).
+- Some return **local time with an offset**.
+
+The integration normalizes all provider times to UTC:
+- If a timestamp includes an offset, it is treated as authoritative and converted to UTC.
+- If a timestamp is **naive**, it is interpreted in the **airport’s TZ** (from directory/cache/OpenFlights).
+  This is why airport tz lookup is important; without it, `*_local` fields can’t be computed.
 
 ### Canonical Fields (What They Mean)
 Top‑level:
-- `status_state`: normalized state (scheduled | active | landed | cancelled | unknown)
-- `delay_status`: computed on_time | delayed | cancelled | arrived | unknown
+- `status_state`: normalized state (Scheduled | En Route | Arrived | Cancelled | Diverted | Unknown)
+- `delay_status`: computed on_time | delayed | cancelled | unknown
 - `delay_minutes`: minutes late/early vs schedule (arrival preferred)
 - `duration_*_minutes`: computed durations from dep/arr timestamps
 
@@ -206,7 +251,7 @@ Provider block:
 
 Logic:
 - If status_state == cancelled → `cancelled`
-- If status_state == landed → `arrived`
+- If status_state == arrived → compute delay from actual vs scheduled (arrival preferred)
 - If arrival estimated/actual is available:
   - arrival_delay = arrival_est_or_act − arrival_scheduled
   - delayed if arrival_delay > grace
@@ -379,91 +424,10 @@ views:
                   "action": "call-service",
                   "service": "select.select_option",
                   "target": { "entity_id": "select.flight_dashboard_selected_flight" },
-                  "data": { "option": "{{ f.flight_key }} | {{ f.airline_code }} {{ f.flight_number }} {{ f.dep.airport.iata }}→{{ f.arr.airport.iata }} {{ f.dep.scheduled }}" }
+                  "data": { "option": "{{ f.flight_key }}" }
                 }
               }{{ "," if not loop.last else "" }}
             {%- endfor -%} ]
-
-      - type: vertical-stack
-        cards:
-          - type: custom:mushroom-template-card
-            entity: sensor.flight_dashboard_selected_flight
-            picture: >-
-              {{ (state_attr('sensor.flight_dashboard_selected_flight','flight') or {}).get('airline_logo_url') }}
-            primary: >
-              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
-              {{ f.get('airline_code','—') }} {{ f.get('flight_number','—') }}
-              · {{ (f.get('delay_status') or 'unknown') | title }}
-            secondary: >
-              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
-              {% set dep = f.get('dep') or {} %}
-              {% set arr = f.get('arr') or {} %}
-              {% set dep_air = dep.get('airport') or {} %}
-              {% set arr_air = arr.get('airport') or {} %}
-              {{ dep_air.get('city') or dep_air.get('name') or dep_air.get('iata') or '—' }}
-              → {{ arr_air.get('city') or arr_air.get('name') or arr_air.get('iata') or '—' }}
-              · {{ f.get('aircraft_type','') }}
-              · {{ (f.get('travellers') | join(', ')) if f.get('travellers') else '—' }}
-            multiline_secondary: true
-
-          - type: markdown
-            content: >
-              {% set f = state_attr('sensor.flight_dashboard_selected_flight','flight') or {} %}
-              {% set dep = f.get('dep') or {} %}
-              {% set arr = f.get('arr') or {} %}
-              {% set dep_air = dep.get('airport') or {} %}
-              {% set arr_air = arr.get('airport') or {} %}
-              {% set viewer_tz = now().strftime('%Z') %}
-
-              {% set dep_sched_local_dt = dep.get('scheduled_local') and as_datetime(dep.get('scheduled_local')) %}
-              {% set dep_est_local_dt = dep.get('estimated_local') and as_datetime(dep.get('estimated_local')) %}
-              {% set dep_act_local_dt = dep.get('actual_local') and as_datetime(dep.get('actual_local')) %}
-              {% set dep_est_or_act_local_dt = dep_act_local_dt or dep_est_local_dt %}
-
-              {% set arr_sched_local_dt = arr.get('scheduled_local') and as_datetime(arr.get('scheduled_local')) %}
-              {% set arr_est_local_dt = arr.get('estimated_local') and as_datetime(arr.get('estimated_local')) %}
-              {% set arr_act_local_dt = arr.get('actual_local') and as_datetime(arr.get('actual_local')) %}
-              {% set arr_est_or_act_local_dt = arr_act_local_dt or arr_est_local_dt %}
-
-              {% set dep_sched_viewer_dt = dep.get('scheduled') and (as_datetime(dep.get('scheduled')) | as_local) %}
-              {% set dep_est_viewer_dt = dep.get('estimated') and (as_datetime(dep.get('estimated')) | as_local) %}
-              {% set dep_act_viewer_dt = dep.get('actual') and (as_datetime(dep.get('actual')) | as_local) %}
-              {% set dep_est_or_act_viewer_dt = dep_act_viewer_dt or dep_est_viewer_dt %}
-
-              {% set arr_sched_viewer_dt = arr.get('scheduled') and (as_datetime(arr.get('scheduled')) | as_local) %}
-              {% set arr_est_viewer_dt = arr.get('estimated') and (as_datetime(arr.get('estimated')) | as_local) %}
-              {% set arr_act_viewer_dt = arr.get('actual') and (as_datetime(arr.get('actual')) | as_local) %}
-              {% set arr_est_or_act_viewer_dt = arr_act_viewer_dt or arr_est_viewer_dt %}
-
-              {% set dep_sched_local_date = dep_sched_local_dt and dep_sched_local_dt.strftime('%d %b') %}
-              {% set dep_est_or_act_local_date = dep_est_or_act_local_dt and dep_est_or_act_local_dt.strftime('%d %b') %}
-              {% set arr_sched_local_date = arr_sched_local_dt and arr_sched_local_dt.strftime('%d %b') %}
-              {% set arr_est_or_act_local_date = arr_est_or_act_local_dt and arr_est_or_act_local_dt.strftime('%d %b') %}
-
-              |   | **Dep** | **Arr** |
-              |---|---|---|
-              | **Airport ({{ dep_air.get('tz_short','—') }}/{{ arr_air.get('tz_short','—') }})** | S: {{ dep_sched_local_dt and dep_sched_local_dt.strftime('%H:%M') or '—' }}, E/A: {{ dep_est_or_act_local_dt and dep_est_or_act_local_dt.strftime('%H:%M') or '—' }} | S: {{ arr_sched_local_dt and arr_sched_local_dt.strftime('%H:%M') or '—' }}, E/A: {{ arr_est_or_act_local_dt and arr_est_or_act_local_dt.strftime('%H:%M') or '—' }} |
-              | **Viewer ({{ viewer_tz }})** | S: {{ dep_sched_viewer_dt and dep_sched_viewer_dt.strftime('%H:%M') or '—' }}{% if dep_sched_viewer_dt and dep_sched_local_date and dep_sched_viewer_dt.strftime('%d %b') != dep_sched_local_date %} ({{ dep_sched_viewer_dt.strftime('%d %b') }}){% endif %}, E/A: {{ dep_est_or_act_viewer_dt and dep_est_or_act_viewer_dt.strftime('%H:%M') or '—' }}{% if dep_est_or_act_viewer_dt and dep_est_or_act_local_date and dep_est_or_act_viewer_dt.strftime('%d %b') != dep_est_or_act_local_date %} ({{ dep_est_or_act_viewer_dt.strftime('%d %b') }}){% endif %} | S: {{ arr_sched_viewer_dt and arr_sched_viewer_dt.strftime('%H:%M') or '—' }}{% if arr_sched_viewer_dt and arr_sched_local_date and arr_sched_viewer_dt.strftime('%d %b') != arr_sched_local_date %} ({{ arr_sched_viewer_dt.strftime('%d %b') }}){% endif %}, E/A: {{ arr_est_or_act_viewer_dt and arr_est_or_act_viewer_dt.strftime('%H:%M') or '—' }}{% if arr_est_or_act_viewer_dt and arr_est_or_act_local_date and arr_est_or_act_viewer_dt.strftime('%d %b') != arr_est_or_act_local_date %} ({{ arr_est_or_act_viewer_dt.strftime('%d %b') }}){% endif %} |
-
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: binary_sensor.flight_dashboard_selected_has_position
-                state: "on"
-            card:
-              type: custom:map-card
-              auto_fit: true
-              auto_fit_padding: 0.1
-              zoom: 5
-              focus_entity: sensor.flight_dashboard_selected_flight
-              entities:
-                - entity: sensor.flight_dashboard_selected_flight
-                  latitude: latitude
-                  longitude: longitude
-                  label: Aircraft
-                  icon: mdi:airplane
-                  size: 40
-                  rotate: "{{ state_attr('sensor.flight_dashboard_selected_flight','heading') | int(0) }}"
 
 ### Manage Flights Dashboard (full)
 ```yaml
@@ -589,7 +553,7 @@ views:
               - entity: button.flight_dashboard_refresh_now
                 name: Refresh now
               - entity: button.flight_dashboard_remove_landed_flights
-                name: Remove landed flights
+                name: Remove arrived flights
           - type: markdown
             title: Provider Blocks Detail
             content: >
@@ -608,13 +572,274 @@ views:
 ### Individual Cards
 
 #### Add Flight (preview + confirm)
-Use the **Add Flight** card from the Manage Flights dashboard above.
+Use this **Add Flight** card with the Tailwind preview panel:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: custom:mushroom-title-card
+    title: Add a flight
+    subtitle: Enter airline + number, preview, then confirm
+  - type: entities
+    show_header_toggle: false
+    entities:
+      - entity: input_text.fd_airline
+        name: Airline code (e.g. EK)
+      - entity: input_text.fd_flight_number
+        name: Flight number (e.g. 236)
+      - entity: input_datetime.fd_flight_date
+        name: Date
+      - entity: input_text.fd_dep_airport
+        name: Departure airport (optional, e.g. AMD)
+      - entity: input_text.fd_travellers
+        name: Travellers (optional)
+      - entity: input_text.fd_notes
+        name: Notes (optional)
+
+  - type: custom:tailwindcss-template-card
+    content: >
+      {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') or {} %}
+      {% set f = p.get('flight') %}
+      {% if not f %}
+      <div class='rounded-2xl bg-[rgba(255,255,255,0.04)] p-4'>
+        <div class='text-sm opacity-80'>Enter airline + number, then tap Preview.</div>
+      </div>
+      {% else %}
+
+      {% set dep = f.get('dep') or {} %}
+      {% set arr = f.get('arr') or {} %}
+      {% set dep_air = dep.get('airport') or {} %}
+      {% set arr_air = arr.get('airport') or {} %}
+
+      {% set dep_code = (dep_air.get('iata') or '—') | upper %}
+      {% set arr_code = (arr_air.get('iata') or '—') | upper %}
+
+      {% set dep_label_raw = dep_air.get('city') or dep_air.get('name') or dep_code %}
+      {% set arr_label_raw = arr_air.get('city') or arr_air.get('name') or arr_code %}
+
+      {% set dep_label = dep_label_raw | title %}
+      {% set arr_label = arr_label_raw | title %}
+
+      {% set dep_sched_dt = dep.get('scheduled_local') and as_datetime(dep.get('scheduled_local')) %}
+      {% set dep_est_dt = dep.get('estimated_local') and as_datetime(dep.get('estimated_local')) %}
+      {% set dep_act_dt = dep.get('actual_local') and as_datetime(dep.get('actual_local')) %}
+
+      {% set arr_sched_dt = arr.get('scheduled_local') and as_datetime(arr.get('scheduled_local')) %}
+      {% set arr_est_dt = arr.get('estimated_local') and as_datetime(arr.get('estimated_local')) %}
+      {% set arr_act_dt = arr.get('actual_local') and as_datetime(arr.get('actual_local')) %}
+
+      {% set dep_sched = dep_sched_dt and dep_sched_dt.strftime('%H:%M') %}
+      {% set dep_est = dep_est_dt and dep_est_dt.strftime('%H:%M') %}
+      {% set dep_act = dep_act_dt and dep_act_dt.strftime('%H:%M') %}
+
+      {% set arr_sched = arr_sched_dt and arr_sched_dt.strftime('%H:%M') %}
+      {% set arr_est = arr_est_dt and arr_est_dt.strftime('%H:%M') %}
+      {% set arr_act = arr_act_dt and arr_act_dt.strftime('%H:%M') %}
+
+      {% set dep_tz = dep_air.get('tz_short') or '' %}
+      {% set arr_tz = arr_air.get('tz_short') or '' %}
+      {% set viewer_tz = now().strftime('%Z') %}
+
+      {% set dep_viewer_dt = dep.get('scheduled') and (as_datetime(dep.get('scheduled')) | as_local) %}
+      {% set arr_viewer_dt = arr.get('scheduled') and (as_datetime(arr.get('scheduled')) | as_local) %}
+      {% set dep_viewer = dep_viewer_dt and dep_viewer_dt.strftime('%H:%M') %}
+      {% set arr_viewer = arr_viewer_dt and arr_viewer_dt.strftime('%H:%M') %}
+
+      {% set dep_est_or_act = dep_act or dep_est %}
+      {% set arr_est_or_act = arr_act or arr_est %}
+
+      {% set dep_changed = dep_est_or_act and dep_sched and dep_est_or_act != dep_sched %}
+      {% set arr_changed = arr_est_or_act and arr_sched and arr_est_or_act != arr_sched %}
+
+      {% set dep_date = dep_sched_dt and dep_sched_dt.strftime('%d %b') or '—' %}
+
+      {% set airline_logo = f.get('airline_logo_url') or ("https://pics.avs.io/64/64/" ~ (f.get('airline_code','') | upper) ~ ".png") %}
+
+      <div class='rounded-2xl bg-[rgba(255,255,255,0.04)] p-4 space-y-2'>
+        <div class='flex items-center gap-3'>
+          <img src='{{ airline_logo }}' class='h-6 w-6 object-contain rounded' />
+          <div class='flex-1'>
+            <div class='text-lg font-semibold'>
+              {{ f.get('airline_code','—') }} {{ f.get('flight_number','—') }} · {{ dep_code }} → {{ arr_code }} · {{ dep_date }}
+            </div>
+            <div class='text-sm opacity-80'>
+              {{ f.get('airline_name') or '' }}{% if f.get('aircraft_type') %} · {{ f.get('aircraft_type') }}{% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div class='grid grid-cols-2 gap-3 text-sm'>
+          <div>
+            <div class='font-semibold'>{{ dep_label }} ({{ dep_code }})</div>
+            <div>
+              {% if dep_changed %}
+                <span class='line-through opacity-60'>{{ dep_sched }}</span>
+                <span class='font-semibold'>{{ dep_est_or_act }}</span>
+              {% else %}
+                <span>{{ dep_est_or_act or dep_sched or '—' }}</span>
+              {% endif %} {{ dep_tz }}
+            </div>
+            {% if dep_tz and dep_tz != viewer_tz and dep_viewer %}
+              <div class='opacity-70'>{{ dep_viewer }} {{ viewer_tz }}</div>
+            {% endif %}
+          </div>
+          <div>
+            <div class='font-semibold'>{{ arr_label }} ({{ arr_code }})</div>
+            <div>
+              {% if arr_changed %}
+                <span class='line-through opacity-60'>{{ arr_sched }}</span>
+                <span class='font-semibold'>{{ arr_est_or_act }}</span>
+              {% else %}
+                <span>{{ arr_est_or_act or arr_sched or '—' }}</span>
+              {% endif %} {{ arr_tz }}
+            </div>
+            {% if arr_tz and arr_tz != viewer_tz and arr_viewer %}
+              <div class='opacity-70'>{{ arr_viewer }} {{ viewer_tz }}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class='text-sm opacity-80'>
+          {% if p.get('hint') %}
+            ❗ {{ p.get('hint') }}
+          {% elif p.get('warning') %}
+            ⚠️ {{ p.get('warning') }}
+          {% elif p.get('error') %}
+            ❌ {{ p.get('error') }}
+          {% endif %} Ready to Add Flight: {{ p.get('ready') }}
+        </div>
+      </div>
+      {% endif %}
+
+  - type: horizontal-stack
+    cards:
+      - type: custom:mushroom-entity-card
+        entity: script.fd_preview_flight
+        name: Preview Flight
+        icon: mdi:magnify
+        tap_action:
+          action: call-service
+          service: script.turn_on
+          target:
+            entity_id: script.fd_preview_flight
+      - type: custom:mushroom-entity-card
+        entity: script.fd_confirm_add
+        name: Add Flight
+        icon: mdi:content-save
+        tap_action:
+          action: call-service
+          service: script.turn_on
+          target:
+            entity_id: script.fd_confirm_add
+      - type: custom:mushroom-entity-card
+        entity: script.fd_clear_preview
+        name: Clear
+        icon: mdi:close-circle
+        tap_action:
+          action: call-service
+          service: script.turn_on
+          target:
+            entity_id: script.fd_clear_preview
+```
 
 #### Flight Status List
-Use the **Flight Status list** card from the Flight Status dashboard above.
+Use this **Tailwind Flight List** card (sorted by departure time). Requires
+`custom:tailwindcss-template-card` and `custom:auto-entities`.
 
-#### Detailed Flight View (selected flight + map)
-Use the **Selected Flight** stack from the Flight Status dashboard above.
+```yaml
+type: vertical-stack
+cards:
+  - type: custom:mushroom-title-card
+    title: Flight List
+  - type: custom:auto-entities
+    card:
+      type: vertical-stack
+    card_param: cards
+    filter:
+      template: >
+        {% set flights = state_attr('sensor.flight_dashboard_upcoming_flights','flights') or [] %}
+        {% set flights = flights | sort(attribute='dep.scheduled') %}
+        [
+        {%- for f in flights -%}
+
+          {%- set dep = f.dep or {} -%}
+          {%- set arr = f.arr or {} -%}
+          {%- set dep_air = dep.airport or {} -%}
+          {%- set arr_air = arr.airport or {} -%}
+
+          {%- set dep_code = (dep_air.iata or '—') | upper -%}
+          {%- set arr_code = (arr_air.iata or '—') | upper -%}
+
+          {%- set dep_label_raw = dep_air.city or dep_air.name or dep_code -%}
+          {%- set arr_label_raw = arr_air.city or arr_air.name or arr_code -%}
+
+          {%- set dep_label = dep_label_raw | title -%}
+          {%- set arr_label = arr_label_raw | title -%}
+
+          {%- set dep_sched_dt = dep.scheduled_local and as_datetime(dep.scheduled_local) -%}
+          {%- set dep_est_dt = dep.estimated_local and as_datetime(dep.estimated_local) -%}
+          {%- set dep_act_dt = dep.actual_local and as_datetime(dep.actual_local) -%}
+
+          {%- set arr_sched_dt = arr.scheduled_local and as_datetime(arr.scheduled_local) -%}
+          {%- set arr_est_dt = arr.estimated_local and as_datetime(arr.estimated_local) -%}
+          {%- set arr_act_dt = arr.actual_local and as_datetime(arr.actual_local) -%}
+
+          {%- set dep_sched = dep_sched_dt and dep_sched_dt.strftime('%H:%M') -%}
+          {%- set dep_est = dep_est_dt and dep_est_dt.strftime('%H:%M') -%}
+          {%- set dep_act = dep_act_dt and dep_act_dt.strftime('%H:%M') -%}
+
+          {%- set arr_sched = arr_sched_dt and arr_sched_dt.strftime('%H:%M') -%}
+          {%- set arr_est = arr_est_dt and arr_est_dt.strftime('%H:%M') -%}
+          {%- set arr_act = arr_act_dt and arr_act_dt.strftime('%H:%M') -%}
+
+          {%- set dep_tz = dep_air.tz_short or '' -%}
+          {%- set arr_tz = arr_air.tz_short or '' -%}
+          {%- set viewer_tz = now().strftime('%Z') -%}
+
+          {%- set dep_viewer_dt = dep.scheduled and (as_datetime(dep.scheduled) | as_local) -%}
+          {%- set arr_viewer_dt = arr.scheduled and (as_datetime(arr.scheduled) | as_local) -%}
+          {%- set dep_viewer = dep_viewer_dt and dep_viewer_dt.strftime('%H:%M') -%}
+          {%- set arr_viewer = arr_viewer_dt and arr_viewer_dt.strftime('%H:%M') -%}
+
+          {%- set dep_est_or_act = dep_act or dep_est -%}
+          {%- set arr_est_or_act = arr_act or arr_est -%}
+
+          {%- set dep_changed = dep_est_or_act and dep_sched and dep_est_or_act != dep_sched -%}
+          {%- set arr_changed = arr_est_or_act and arr_sched and arr_est_or_act != arr_sched -%}
+
+          {%- set delay = (f.get('delay_status') or 'Unknown') -%}
+          {%- set time_color = 'text-emerald-300' if delay == 'On Time' else ('text-red-300' if delay == 'Delayed' else 'text-gray-300') -%}
+
+          {%- set raw_state = (f.get('status_state') or 'Unknown') -%}
+          {%- set raw_state_lc = raw_state | lower -%}
+          {%- set dep_state_dt = dep.scheduled and as_datetime(dep.scheduled) -%}
+          {%- set is_future = dep_state_dt and dep_state_dt > now() -%}
+          {%- set state = 'Scheduled' if (raw_state_lc == 'unknown' and is_future) else (raw_state | title) -%}
+
+          {%- set badge = 'bg-gray-600 text-white' -%}
+          {%- if state == 'Scheduled' -%}
+            {%- set badge = 'bg-yellow-600 text-black' -%}
+          {%- elif state == 'Active' -%}
+            {%- set badge = 'bg-blue-600 text-white' -%}
+          {%- elif state == 'Arrived' -%}
+            {%- set badge = 'bg-emerald-700 text-white' -%}
+          {%- elif state == 'Cancelled' -%}
+            {%- set badge = 'bg-red-700 text-white' -%}
+          {%- elif state == 'Diverted' -%}
+            {%- set badge = 'bg-orange-600 text-white' -%}
+          {%- endif -%}
+
+          {%- set dep_date = dep_sched_dt and dep_sched_dt.strftime('%d %b') or '—' -%}
+          {%- set pax = (f.travellers | join(', ')) if f.travellers else '' -%}
+
+          {
+            "type": "custom:tailwindcss-template-card",
+            "content": "<div class='rounded-2xl bg-[rgba(255,255,255,0.04)] p-4 space-y-2'><div class='flex items-center gap-3'><img src='{{ f.airline_logo_url }}' class='h-6 w-6 object-contain rounded' /><div class='flex-1'><div class='text-lg font-semibold'>{{ f.airline_code }} {{ f.flight_number }} · {{ dep_code }} → {{ arr_code }} · {{ dep_date }}</div><div class='text-sm opacity-80'>{{ f.airline_name or '' }}{% if f.aircraft_type %} · {{ f.aircraft_type }}{% endif %}</div></div><span class='text-xs px-2 py-1 rounded-full {{ badge }}'>{{ state }}</span></div><div class='grid grid-cols-2 gap-3 text-sm'><div><div class='font-semibold'>{{ dep_label }} ({{ dep_code }})</div><div>{% if dep_changed %}<span class='line-through opacity-60'>{{ dep_sched }}</span> <span class='{{ time_color }} font-semibold'>{{ dep_est_or_act }}</span>{% else %}<span>{{ dep_est_or_act or dep_sched or '—' }}</span>{% endif %} {{ dep_tz }}</div>{% if dep_tz and dep_tz != viewer_tz and dep_viewer %}<div class='opacity-70'>{{ dep_viewer }} {{ viewer_tz }}</div>{% endif %}<div class='opacity-70'>T {{ dep.terminal or '—' }} / G {{ dep.gate or '—' }}</div></div><div><div class='font-semibold'>{{ arr_label }} ({{ arr_code }})</div><div>{% if arr_changed %}<span class='line-through opacity-60'>{{ arr_sched }}</span> <span class='{{ time_color }} font-semibold'>{{ arr_est_or_act }}</span>{% else %}<span>{{ arr_est_or_act or arr_sched or '—' }}</span>{% endif %} {{ arr_tz }}</div>{% if arr_tz and arr_tz != viewer_tz and arr_viewer %}<div class='opacity-70'>{{ arr_viewer }} {{ viewer_tz }}</div>{% endif %}<div class='opacity-70'>T {{ arr.terminal or '—' }} / G {{ arr.gate or '—' }}</div></div></div>{% if pax %}<div class='text-sm opacity-80'>Pax: {{ pax }}</div>{% endif %}</div>"
+          }{{ "," if not loop.last else "" }}
+
+        {%- endfor -%}
+        ]
+```
 
 #### Diagnostics
 Use the **Diagnostics** stack from the Manage Flights dashboard above.
@@ -644,8 +869,82 @@ Clear all manual flights.
 Force a refresh of upcoming flights and status updates.
 
 ### `flight_dashboard.prune_landed`
-Remove landed/cancelled manual flights. Optional `hours` delay after arrival.
+Remove past flights (arrival time older than cutoff). Optional `hours` delay after arrival.
 
 ## Notes
 - Schedule and status timestamps are stored as ISO strings (typically UTC). Convert at display time.
 - Manual flights are editable; provider-sourced flights are read-only.
+
+## Data Model (Flight Schema v3)
+
+This integration exposes a single *upcoming flights* sensor whose `flights` attribute is a list of flight objects. Each flight uses the normalized schema below.
+
+### Top-level fields
+
+- `flight_key` (string): Stable unique identifier (`AIRLINE-FLIGHT-DEP-YYYY-MM-DD`). Used for selection and dedupe.
+- `source` (string): `manual`, `tripit`, or provider-derived.
+- `airline_code` (string): IATA airline code (e.g., `EK`, `AI`, `6E`).
+- `flight_number` (string): Flight number as string (e.g., `"2"`, `"6718"`).
+- `airline_name` (string|null): Airline display name (from directory or provider).
+- `airline_logo_url` (string|null): Logo URL (best effort).
+- `aircraft_type` (string|null): Normalized aircraft type name.
+- `travellers` (list<string>): Passenger names (optional).
+- `notes` (string|null): User notes (optional).
+- `editable` (bool): True for manual/tripit flights.
+
+### Status & timing (normalized)
+
+- `status_state` (string): Canonical status: `Scheduled`, `En Route`, `Arrived`, `Cancelled`, `Diverted`, `Unknown`.
+- `delay_status` (string): `on_time`, `delayed`, `cancelled`, `unknown` (computed).
+- `delay_status_key` (string): Snake_case version of `delay_status` (for UI coloring).
+- `delay_minutes` (int|null): Minutes vs scheduled (arrival preferred when available).
+- `status_updated_at` (ISO string|null): When status was last refreshed.
+- `diverted_to_iata` (string|null): Diversion airport IATA when `status_state=Diverted`.
+- `diverted_to_airport` (object|null): Diversion airport details (iata/name/city/tz/tz_short).
+
+### Duration fields (computed)
+
+- `duration_scheduled_minutes` (int|null): Scheduled duration.
+- `duration_estimated_minutes` (int|null): Estimated duration (if estimates exist).
+- `duration_actual_minutes` (int|null): Actual duration (if actuals exist).
+- `duration_minutes` (int|null): Best available duration (actual → estimated → scheduled).
+
+### Departure/Arrival blocks
+
+Each flight has `dep` and `arr` objects. Each block contains:
+
+- `airport`:
+  - `iata` (string|null)
+  - `name` (string|null)
+  - `city` (string|null)
+  - `tz` (string|null): IANA TZ name (e.g., `Europe/Paris`)
+  - `tz_short` (string|null): Short TZ label (e.g., `CET`, `+04`)
+- `scheduled` / `estimated` / `actual` (ISO string|null): UTC timestamps.
+- `scheduled_local` / `estimated_local` / `actual_local` (ISO string|null): Local timestamps (airport TZ) when available.
+- `terminal` (string|null)
+- `gate` (string|null)
+
+### Position (optional)
+
+- `position`:
+  - `lat` / `lon` (float)
+  - `alt` (int|null)
+  - `gspeed` (int|null)
+  - `track` (int|null)
+  - `timestamp` (ISO string|null)
+  - `source` (string|null)
+  - `provider` (string|null)
+
+### Raw provider status (normalized subset)
+
+- `status` (object|null): Best-effort normalized provider status payload. This is **not** a raw passthrough; it is a normalized subset to help debugging.
+  - `provider` (string): Provider name.
+  - `provider_state` (string|null): Provider’s original state string.
+  - `dep_scheduled` / `dep_estimated` / `dep_actual` (string|null): Provider timestamps (normalized to UTC).
+  - `arr_scheduled` / `arr_estimated` / `arr_actual` (string|null): Provider timestamps (normalized to UTC).
+  - `dep_iata` / `arr_iata` (string|null)
+  - `aircraft_type` (string|null)
+  - `terminal_dep` / `gate_dep` (string|null)
+  - `terminal_arr` / `gate_arr` (string|null)
+  - `position` (object|null): Provider position (if available).
+  - `position_provider` (string|null)

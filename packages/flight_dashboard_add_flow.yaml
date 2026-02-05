@@ -67,6 +67,18 @@ script:
     sequence:
       - service: flight_dashboard.clear_preview
 
+  fd_remove_selected_flight:
+    alias: "Flight Dashboard: Remove selected flight"
+    mode: single
+    sequence:
+      - variables:
+          key: "{{ states('select.flight_dashboard_remove_flight') }}"
+      - condition: template
+        value_template: "{{ key not in ['unknown','unavailable','No flights',''] }}"
+      - service: flight_dashboard.remove_manual_flight
+        data:
+          flight_key: "{{ key }}"
+
 automation:
   - alias: "FD: Initialize add flight defaults"
     mode: single

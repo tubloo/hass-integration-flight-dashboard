@@ -22,6 +22,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from .rate_limit import is_blocked, set_block
+from .status_resolver import _normalize_status_state
 
 # We read options from the integration options dict that you already store
 DOMAIN = "flight_dashboard"
@@ -242,7 +243,7 @@ async def lookup_schedule(
                     "airline_logo_url": st.get("airline_logo_url"),
                     "aircraft_type": st.get("aircraft_type"),
                     "travellers": [],
-                    "status_state": st.get("state") or "unknown",
+                    "status_state": _normalize_status_state(st.get("state"), "flightradar24"),
                     "notes": None,
                     "dep": {
                         "airport": {"iata": dep_iata, "name": None, "city": None, "tz": st.get("dep_tz"), "tz_short": None},
@@ -291,7 +292,7 @@ async def lookup_schedule(
                     "airline_logo_url": details.get("airline_logo_url"),
                     "aircraft_type": details.get("aircraft_type"),
                     "travellers": [],
-                    "status_state": details.get("state") or "unknown",
+                    "status_state": _normalize_status_state(details.get("state"), "aviationstack"),
                     "notes": None,
                     "dep": {
                         "airport": {"iata": dep_iata, "name": None, "city": None, "tz": details.get("dep_tz"), "tz_short": None},
@@ -349,7 +350,7 @@ async def lookup_schedule(
                     "airline_logo_url": details.get("airline_logo_url"),
                     "aircraft_type": details.get("aircraft_type"),
                     "travellers": [],
-                    "status_state": details.get("state") or "unknown",
+                    "status_state": _normalize_status_state(details.get("state"), "airlabs"),
                     "notes": None,
                     "dep": {
                         "airport": {"iata": dep_iata, "name": None, "city": None, "tz": details.get("dep_tz"), "tz_short": None},
@@ -420,7 +421,7 @@ async def lookup_schedule(
                     "airline_logo_url": details.get("airline_logo_url"),
                     "aircraft_type": details.get("aircraft_type"),
                     "travellers": [],
-                    "status_state": details.get("state") or "unknown",
+                    "status_state": _normalize_status_state(details.get("state"), "flightapi"),
                     "notes": None,
                     "dep": {
                         "airport": {"iata": dep_iata, "name": None, "city": None, "tz": details.get("dep_tz"), "tz_short": None},

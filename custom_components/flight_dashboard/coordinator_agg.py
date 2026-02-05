@@ -90,7 +90,8 @@ def merge_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cur[side] = cur_side
 
         # status_state: prefer non-unknown
-        if (cur.get("status_state") in (None, "", "unknown")) and seg.get("status_state"):
+        cur_state = (cur.get("status_state") or "").strip().lower()
+        if (cur_state in ("", "unknown")) and seg.get("status_state"):
             cur["status_state"] = seg.get("status_state")
 
     # sort by departure scheduled time (string ISO sorts ok if all have offsets; safer parse elsewhere)

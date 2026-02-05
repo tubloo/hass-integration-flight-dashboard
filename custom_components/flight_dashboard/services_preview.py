@@ -233,7 +233,7 @@ async def async_register_preview_services(
             "flight_number": flight_number,
             "travellers": travellers,
             "notes": notes,
-            "status_state": "unknown",
+            "status_state": "Unknown",
             "airline_name": None,
             "airline_logo_url": airline_logo_url(airline),
             "aircraft_type": None,
@@ -353,6 +353,11 @@ async def async_register_preview_services(
             f["dep"] = dep
             f["arr"] = arr
             preview["flight"] = f
+            # Ensure flight_key is set once dep IATA is known
+            dep_iata = ((f.get("dep") or {}).get("airport") or {}).get("iata")
+            if not f.get("flight_key") or f.get("flight_key") == _build_flight_key(airline, flight_number, None, date_str):
+                f["flight_key"] = _build_flight_key(f.get("airline_code") or airline, f.get("flight_number") or flight_number, dep_iata, date_str)
+                preview["flight"] = f
 
             # If provider returned multiple matches, require user disambiguation
             ready, hint = _preview_complete(preview.get("flight"))
@@ -394,6 +399,10 @@ async def async_register_preview_services(
         f = (preview or {}).get("flight")
         if not isinstance(f, dict):
             return
+        # Backstop: compute flight_key if missing
+        if not f.get("flight_key"):
+            dep_iata = ((f.get("dep") or {}).get("airport") or {}).get("iata")
+            f["flight_key"] = _build_flight_key(f.get("airline_code"), f.get("flight_number"), dep_iata, (preview or {}).get("input", {}).get("date"))
 
         try:
             flight_key = await async_add_manual_flight_record(hass, f)

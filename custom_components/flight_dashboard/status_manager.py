@@ -74,9 +74,7 @@ def _best_time(flight: dict[str, Any], side: str, keys: list[str]) -> datetime |
 def _compute_delay_status(flight: dict[str, Any], grace_minutes: int) -> tuple[str, int | None]:
     state = (flight.get("status_state") or "unknown").lower()
     if state in ("cancelled", "canceled"):
-        return "cancelled", None
-    if state == "landed":
-        return "arrived", None
+        return "Cancelled", None
 
     dep = flight.get("dep") or {}
     arr = flight.get("arr") or {}
@@ -94,13 +92,13 @@ def _compute_delay_status(flight: dict[str, Any], grace_minutes: int) -> tuple[s
         ref_sched, ref_est = dep_sched, dep_est
 
     if not ref_sched or not ref_est:
-        return "unknown", None
+        return "Unknown", None
 
     delta = dt_util.as_utc(ref_est) - dt_util.as_utc(ref_sched)
     minutes = int(round(delta.total_seconds() / 60))
     if minutes > grace_minutes:
-        return "delayed", minutes
-    return "on_time", minutes
+        return "Delayed", minutes
+    return "On Time", minutes
 
 
 def _duration_minutes(dep_dt: datetime | None, arr_dt: datetime | None) -> int | None:
@@ -175,9 +173,13 @@ def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minu
             return max(ttl_seconds, 30 * 60)
         return max(ttl_seconds, 10 * 60)
 
-    # If landed/cancelled and within a few hours, check rarely
-    if state in ("landed", "cancelled"):
-        return max(ttl_seconds, 3 * 60 * 60)
+    # Stop refreshing once arrived/cancelled
+    if state in ("arrived", "cancelled"):
+        return None
+
+    # If diverted, treat like active/en route (refresh frequently)
+    if state == "diverted":
+        return max(ttl_seconds, 15 * 60)
 
     # Fallback: periodic but not frequent
     return max(ttl_seconds, 60 * 60)
@@ -461,6 +463,7 @@ async def async_update_statuses(
             apply_status(f, status)
         delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
         f["delay_status"] = delay_state
+        f["delay_status_key"] = (delay_state or "unknown").lower().replace(" ", "_")
         f["delay_minutes"] = delay_minutes
         f.update(_compute_durations(f))
 
@@ -488,6 +491,12 @@ async def async_update_statuses(
 
     # Refresh due flights (sequential to limit API calls)
     for f in due:
+        state = (f.get("status_state") or "unknown").lower()
+        if state in ("arrived", "cancelled"):
+            key = f.get("flight_key")
+            if key:
+                cache.pop(key, None)
+            continue
         status_provider = (options.get("status_provider") or "flightradar24").lower()
         position_provider = (options.get(CONF_POSITION_PROVIDER) or "same_as_status").lower()
         if position_provider in ("same_as_status", "same", "status"):
@@ -528,6 +537,7 @@ async def async_update_statuses(
 
         delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
         f["delay_status"] = delay_state
+        f["delay_status_key"] = (delay_state or "unknown").lower().replace(" ", "_")
         f["delay_minutes"] = delay_minutes
         f.update(_compute_durations(f))
         # Compute next refresh time

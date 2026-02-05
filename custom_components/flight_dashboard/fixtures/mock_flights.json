@@ -9,7 +9,7 @@
     "airline_logo_url": "https://pics.avs.io/64/64/AI.png",
     "aircraft_type": "B788",
     "travellers": [],
-    "status_state": "scheduled",
+    "status_state": "Scheduled",
     "notes": null,
     "dep": {
       "airport": {

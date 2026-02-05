@@ -130,7 +130,7 @@ class ManualItineraryProvider:
                     "airline_logo_url": airline_logo_url,
                     "aircraft_type": raw.get("aircraft_type"),
                     "travellers": raw.get("travellers") or [],
-                    "status_state": raw.get("status_state") or (status or {}).get("state") or "unknown",
+                    "status_state": raw.get("status_state") or (status or {}).get("state") or "Unknown",
                     "notes": raw.get("notes"),
                     "status": status,
                     # expose stored schedule fields so backfill logic doesn't overwrite them
