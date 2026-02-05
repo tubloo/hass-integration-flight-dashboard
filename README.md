@@ -1309,3 +1309,8 @@ Each flight has `dep` and `arr` objects. Each block contains:
   - `terminal_arr` / `gate_arr` (string|null)
   - `position` (object|null): Provider position (if available).
   - `position_provider` (string|null)
+
+## Compliance Disclaimer
+The user of this integration is solely responsible for ensuring their use complies with the
+terms and conditions of any API providers they configure. The maintainers provide this
+integration “as is” and assume no liability for any API usage or compliance issues.

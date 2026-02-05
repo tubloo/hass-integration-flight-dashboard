@@ -1,7 +1,6 @@
 """Storage helpers for Flight Dashboard.
 
 This module provides:
-- Manual flights storage (list of flights)
 - Preview storage (single preview object used by preview/confirm flow)
 - Optional static cache storage (airports/airlines) for future use
 
@@ -20,35 +19,12 @@ from .const import DOMAIN, SCHEMA_VERSION
 _STORAGE_VERSION = 1
 
 # Store keys
-_STORE_MANUAL = f"{DOMAIN}.manual_flights"
 _STORE_PREVIEW = f"{DOMAIN}.add_preview"
 _STORE_CACHE = f"{DOMAIN}.static_cache"
 
 
 def _store(hass: HomeAssistant, key: str) -> Store:
     return Store(hass, _STORAGE_VERSION, key)
-
-
-# ----------------------------
-# Manual flights (list storage)
-# ----------------------------
-async def async_load_manual_flights(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Load manual flights list."""
-    data = await _store(hass, _STORE_MANUAL).async_load()
-    if not data:
-        return []
-    flights = data.get("flights")
-    return flights if isinstance(flights, list) else []
-
-
-async def async_save_manual_flights(hass: HomeAssistant, flights: list[dict[str, Any]]) -> None:
-    """Save manual flights list."""
-    await _store(hass, _STORE_MANUAL).async_save(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "flights": flights,
-        }
-    )
 
 
 # ----------------------------

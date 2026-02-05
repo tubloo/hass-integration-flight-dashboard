@@ -22,7 +22,7 @@ from .providers.itinerary.manual import ManualItineraryProvider
 from .manual_store import async_remove_manual_flight, async_update_manual_flight
 from .status_manager import async_update_statuses
 from .tz_short import tz_short_name
-from .directory import get_airport, get_airline, warm_directory_cache, async_get_openflights_airport
+from .directory import get_airport, get_airline, warm_directory_cache
 from .fr24_client import FR24Client, FR24RateLimitError, FR24Error
 from .rate_limit import get_blocks, is_blocked, get_block_until, get_block_reason, set_block
 from .selected import get_selected_flight, get_flight_position
@@ -265,12 +265,6 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
             updates: dict[str, Any] = {}
             if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
                 airport = await get_airport(self.hass, options, dep_air.get("iata"))
-                if not airport:
-                    airport = await async_get_openflights_airport(
-                        self.hass,
-                        dep_air.get("iata"),
-                        url=options.get("directory_airports_url"),
-                    )
                 if airport:
                     if not dep_air.get("name") and airport.get("name"):
                         dep_air["name"] = airport.get("name")
@@ -284,12 +278,6 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
             if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
                 airport = await get_airport(self.hass, options, arr_air.get("iata"))
-                if not airport:
-                    airport = await async_get_openflights_airport(
-                        self.hass,
-                        arr_air.get("iata"),
-                        url=options.get("directory_airports_url"),
-                    )
                 if airport:
                     if not arr_air.get("name") and airport.get("name"):
                         arr_air["name"] = airport.get("name")

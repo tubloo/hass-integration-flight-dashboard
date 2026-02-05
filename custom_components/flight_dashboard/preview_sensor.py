@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .storage import async_load_preview
+from .preview_store import async_get_preview
 from .const import SIGNAL_PREVIEW_UPDATED
 
 
@@ -36,7 +36,7 @@ class FlightDashboardAddPreviewSensor(SensorEntity):
             self._unsub = None
 
     async def _refresh(self) -> None:
-        self._preview = await async_load_preview(self.hass)
+        self._preview = await async_get_preview(self.hass)
         self.async_write_ha_state()
 
     @property

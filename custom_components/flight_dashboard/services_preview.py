@@ -35,9 +35,9 @@ from .const import (
 )
 from .manual_store import async_add_manual_flight_record
 from .schedule_lookup import lookup_schedule
-from .directory import airline_logo_url, get_airport, get_airline, async_get_openflights_airport
+from .directory import airline_logo_url, get_airport, get_airline
 from .tz_short import tz_short_name
-from .storage import async_load_preview, async_save_preview, async_clear_preview
+from .preview_store import async_get_preview, async_set_preview
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ async def async_register_preview_services(
                 "flight": None,
                 "status_raw": None,
             }
-            await async_save_preview(hass, preview)
+            await async_set_preview(hass, preview)
             async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
             return
 
@@ -206,7 +206,7 @@ async def async_register_preview_services(
                 "flight": None,
                 "status_raw": None,
             }
-            await async_save_preview(hass, preview)
+            await async_set_preview(hass, preview)
             async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
             return
 
@@ -285,24 +285,12 @@ async def async_register_preview_services(
 
             if dep_air.get("iata") and (not dep_air.get("name") or not dep_air.get("city") or not dep_air.get("tz")):
                 airport = await get_airport(hass, options, dep_air.get("iata"))
-                if not airport:
-                    airport = await async_get_openflights_airport(
-                        hass,
-                        dep_air.get("iata"),
-                        url=options.get("directory_airports_url"),
-                    )
                 if airport:
                     dep_air["name"] = dep_air.get("name") or airport.get("name")
                     dep_air["city"] = dep_air.get("city") or airport.get("city")
                     dep_air["tz"] = dep_air.get("tz") or airport.get("tz")
             if arr_air.get("iata") and (not arr_air.get("name") or not arr_air.get("city") or not arr_air.get("tz")):
                 airport = await get_airport(hass, options, arr_air.get("iata"))
-                if not airport:
-                    airport = await async_get_openflights_airport(
-                        hass,
-                        arr_air.get("iata"),
-                        url=options.get("directory_airports_url"),
-                    )
                 if airport:
                     arr_air["name"] = arr_air.get("name") or airport.get("name")
                     arr_air["city"] = arr_air.get("city") or airport.get("city")
@@ -396,12 +384,12 @@ async def async_register_preview_services(
             preview["error"] = err or "no_match_or_no_provider"
             preview["hint"] = hint or "Either no match was found for that date, or no provider API is configured/available."
 
-        await async_save_preview(hass, preview)
+        await async_set_preview(hass, preview)
         async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
 
     async def _svc_confirm(call: ServiceCall) -> None:
         """Persist the current preview as a manual flight."""
-        preview = await async_load_preview(hass)
+        preview = await async_get_preview(hass)
         if not (preview or {}).get("ready"):
             return
         f = (preview or {}).get("flight")
@@ -414,14 +402,14 @@ async def async_register_preview_services(
 
         try:
             flight_key = await async_add_manual_flight_record(hass, f)
-            await async_clear_preview(hass)
+            await async_set_preview(hass, None)
             async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
         except Exception as e:
             _LOGGER.exception("Confirm add failed")
 
     async def _svc_clear(call: ServiceCall) -> None:
         """Clear any stored preview."""
-        await async_clear_preview(hass)
+        await async_set_preview(hass, None)
         async_dispatcher_send(hass, SIGNAL_PREVIEW_UPDATED)
 
     async def _svc_add_flight(call: ServiceCall) -> None:
