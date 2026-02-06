@@ -21,6 +21,7 @@ from .coordinator_agg import merge_segments
 from .providers.itinerary.manual import ManualItineraryProvider
 from .manual_store import async_remove_manual_flight, async_update_manual_flight
 from .status_manager import async_update_statuses
+from .status_resolver import _normalize_iso_in_tz
 from .tz_short import tz_short_name
 from .directory import get_airport, get_airline, warm_directory_cache
 from .fr24_client import FR24Client, FR24RateLimitError, FR24Error
@@ -221,25 +222,34 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
         # Optional: auto-remove arrived/cancelled flights after arrival time
         if auto_prune:
             cutoff = now - timedelta(hours=prune_hours)
-            removed_any = False
+            removed_manual = False
+            pruned: list[dict[str, Any]] = []
             for f in flights:
                 if not isinstance(f, dict):
                     continue
                 status = (f.get("status_state") or "").lower()
-                if status not in ("arrived", "cancelled"):
+                if status not in ("arrived", "cancelled", "landed"):
+                    pruned.append(f)
                     continue
                 arr = (f.get("arr") or {})
                 arr_time = arr.get("actual") or arr.get("estimated") or arr.get("scheduled")
                 if not isinstance(arr_time, str):
+                    pruned.append(f)
                     continue
                 dt = dt_util.parse_datetime(arr_time)
                 if not dt:
+                    pruned.append(f)
                     continue
                 dt = dt_util.as_utc(dt) if dt.tzinfo else dt_util.as_utc(dt_util.as_local(dt))
                 if dt <= cutoff:
-                    if await async_remove_manual_flight(self.hass, f.get("flight_key", "")):
-                        removed_any = True
-            if removed_any:
+                    if (f.get("source") or "manual") == "manual":
+                        if await async_remove_manual_flight(self.hass, f.get("flight_key", "")):
+                            removed_manual = True
+                    # Always drop from the list (even for non-manual sources)
+                    continue
+                pruned.append(f)
+            flights = pruned
+            if removed_manual:
                 return
 
         for flight in flights:
@@ -328,6 +338,24 @@ class FlightDashboardUpcomingFlightsSensor(SensorEntity):
 
             flight["dep"] = dep
             flight["arr"] = arr
+
+            # Normalize naive timestamps now that tz info may be available from directory
+            dep["scheduled"] = _normalize_iso_in_tz(dep.get("scheduled"), dep_air.get("tz"))
+            dep["estimated"] = _normalize_iso_in_tz(dep.get("estimated"), dep_air.get("tz"))
+            dep["actual"] = _normalize_iso_in_tz(dep.get("actual"), dep_air.get("tz"))
+            arr["scheduled"] = _normalize_iso_in_tz(arr.get("scheduled"), arr_air.get("tz"))
+            arr["estimated"] = _normalize_iso_in_tz(arr.get("estimated"), arr_air.get("tz"))
+            arr["actual"] = _normalize_iso_in_tz(arr.get("actual"), arr_air.get("tz"))
+
+            # Safety: if still far in the future, do not show En Route/Arrived
+            state = (flight.get("status_state") or "unknown").lower()
+            dep_time = dep.get("actual") or dep.get("estimated") or dep.get("scheduled")
+            if state in ("en route", "arrived", "cancelled", "canceled") and isinstance(dep_time, str):
+                dep_dt = dt_util.parse_datetime(dep_time)
+                if dep_dt:
+                    dep_dt = dt_util.as_utc(dep_dt) if dep_dt.tzinfo else dt_util.as_utc(dt_util.as_local(dep_dt))
+                    if dt_util.as_utc(now) < dep_dt - timedelta(minutes=90):
+                        flight["status_state"] = "Scheduled"
 
             # keep output clean (drop old UI-only duplicates if they exist)
             for legacy in (

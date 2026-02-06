@@ -625,6 +625,62 @@ cards:
             entities:
               - entity: input_text.fd_notes
                 name: Notes (optional)
+
+#### Remove Flight
+Use this **Remove Flight** card to delete a single flight you added manually.
+
+![Remove flight sample](docs/flight-remove-sample.png)
+
+```yaml
+type: entities
+title: Remove a flight
+show_header_toggle: false
+entities:
+  - entity: select.flight_dashboard_remove_flight
+    name: Select flight to remove
+  - type: button
+    name: Remove selected flight
+    icon: mdi:delete
+    tap_action:
+      action: call-service
+      service: script.turn_on
+      target:
+        entity_id: script.fd_remove_selected_flight
+```
+
+#### Diagnostics
+Use this **Diagnostics** stack for a quick health check of providers and refresh actions.
+
+![Diagnostics sample](docs/flight-diagnostics-sample.png)
+
+```yaml
+type: vertical-stack
+cards:
+  - type: entities
+    title: Flight Dashboard Diagnostics
+    show_header_toggle: false
+    entities:
+      - entity: sensor.flight_dashboard_upcoming_flights
+        name: Upcoming flights (summary)
+      - entity: sensor.flight_dashboard_fr24_usage
+        name: FR24 usage (credits in last period)
+      - entity: sensor.flight_dashboard_provider_blocks
+        name: Provider blocks
+      - entity: button.flight_dashboard_refresh_now
+        name: Refresh now
+      - entity: button.flight_dashboard_remove_landed_flights
+        name: Remove landed flights
+  - type: markdown
+    title: Provider Blocks Detail
+    content: >
+      {% set p =
+      state_attr('sensor.flight_dashboard_provider_blocks','providers') or {} %}
+      {% if p %} {% for name, info in p.items() %} {% set until_dt = info.until
+      and as_datetime(info.until) %} - **{{ name }}** blocked until
+        {{ until_dt and (as_timestamp(until_dt) | timestamp_custom('%d %b %H:%M', true)) or info.until }}
+        ({{ info.seconds_remaining }}s) · {{ info.reason }}
+      {% endfor %} {% else %} No providers blocked ✅ {% endif %}
+```
   - type: custom:tailwindcss-template-card
     content: >
       {% set p = state_attr('sensor.flight_dashboard_add_preview','preview') or {} %}

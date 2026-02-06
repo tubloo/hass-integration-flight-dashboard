@@ -113,6 +113,21 @@ def _compute_durations(flight: dict[str, Any]) -> dict[str, int | None]:
     }
 
 
+def _coerce_state_by_time(flight: dict[str, Any], now: datetime, future_grace_minutes: int = 90) -> None:
+    """Prevent impossible states when scheduled times are clearly in the future."""
+    state = (flight.get("status_state") or "unknown").lower()
+    if state not in ("en route", "arrived", "cancelled", "canceled"):
+        return
+
+    dep = _best_time(flight, "dep", ["actual", "estimated", "scheduled"])
+    if not dep:
+        return
+
+    now_utc = dt_util.as_utc(now)
+    if now_utc < dep - timedelta(minutes=future_grace_minutes):
+        flight["status_state"] = "Scheduled"
+
+
 def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minutes: int) -> int | None:
     """Compute next refresh interval in seconds.
 
@@ -150,7 +165,7 @@ def compute_next_refresh_seconds(flight: dict[str, Any], now: datetime, ttl_minu
         return max(ttl_seconds, 10 * 60)
 
     # Stop refreshing once arrived/cancelled
-    if state in ("arrived", "cancelled"):
+    if state in ("arrived", "cancelled", "landed"):
         return None
 
     # If diverted, treat like active/en route (refresh frequently)
@@ -196,6 +211,7 @@ async def async_update_statuses(
             f["status"] = status
             f["status_updated_at"] = cached.get("updated_at")
             apply_status(f, status)
+            _coerce_state_by_time(f, now)
         delay_state, delay_minutes = _compute_delay_status(f, grace_minutes)
         f["delay_status"] = delay_state
         f["delay_status_key"] = (delay_state or "unknown").lower().replace(" ", "_")
@@ -227,7 +243,7 @@ async def async_update_statuses(
     # Refresh due flights (sequential to limit API calls)
     for f in due:
         state = (f.get("status_state") or "unknown").lower()
-        if state in ("arrived", "cancelled"):
+        if state in ("arrived", "cancelled", "landed"):
             key = f.get("flight_key")
             if key:
                 cache.pop(key, None)
@@ -251,6 +267,7 @@ async def async_update_statuses(
                 status["position"] = position
                 status["position_provider"] = position_provider
             apply_status(f, status)
+            _coerce_state_by_time(f, now)
         elif position:
             f["position"] = position
 
