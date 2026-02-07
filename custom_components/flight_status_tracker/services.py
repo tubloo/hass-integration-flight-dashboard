@@ -35,6 +35,21 @@ from .status_manager import clear_status_cache
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def notify(hass: HomeAssistant, message: str, *, title: str = "Flight Status Tracker") -> None:
+    """Best-effort user-facing notification."""
+    try:
+        hass.async_create_task(
+            hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {"title": title, "message": message},
+                blocking=False,
+            )
+        )
+    except Exception:
+        _LOGGER.info("%s: %s", title, message)
+
 # --- Backwards-compatible exports expected by other platforms ---
 SERVICE_ADD = SERVICE_ADD_MANUAL_FLIGHT
 SERVICE_REMOVE = SERVICE_REMOVE_MANUAL_FLIGHT

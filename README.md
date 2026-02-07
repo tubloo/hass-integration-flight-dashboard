@@ -42,8 +42,29 @@ Finally, add the integration in **Settings → Devices & Services**.
 
 ## Setup Package (Helpers + Scripts)
 
-The easiest way to create the required helpers/scripts is to include the
-package file in your configuration and restart HA:
+You do **not** need to create any helpers/scripts to start using this integration.
+It ships its own built-in input entities + buttons for the add-flight flow.
+
+### Built-in Add Flight Flow (recommended, no YAML)
+After installing + adding the integration, add these entities to a dashboard (any standard Entities card works):
+
+- `text.flight_status_tracker_add_flight_airline`
+- `text.flight_status_tracker_add_flight_number`
+- `date.flight_status_tracker_add_flight_date`
+- `text.flight_status_tracker_add_flight_dep_airport`
+- `text.flight_status_tracker_add_flight_travellers`
+- `text.flight_status_tracker_add_flight_notes`
+- `button.flight_status_tracker_preview_from_inputs`
+- `button.flight_status_tracker_confirm_add_preview`
+- `button.flight_status_tracker_clear_preview`
+
+Workflow:
+1) Set Airline + Flight number + Date
+2) Press **Preview**
+3) Press **Confirm Add Preview**
+
+### Optional: Package (creates HA helpers/scripts)
+If you prefer the older “helpers + scripts” approach (or want to use the Lovelace examples below unchanged), include the package file in your configuration and restart HA:
 
 1) Ensure `packages:` is enabled in `configuration.yaml`:
 ```yaml
@@ -95,7 +116,7 @@ You can copy the script YAML directly from
 
 ## Required / Recommended Frontend Components
 
-These Lovelace examples use the following custom cards:
+The “fancy card” Lovelace examples use the following custom cards (optional):
 
 **Required for the examples below**
 - **Mushroom** cards (`custom:mushroom-*`)
@@ -106,8 +127,8 @@ If you don’t have these, install them via HACS → Frontend, then restart HA.
 
 ## Helpers & Scripts (Add Flight Flow)
 
-The Add Flight card expects these helpers/scripts to exist. Use the provided
-`/config/packages/flight_status_tracker_add_flow.yaml` or create them in UI:
+Only needed if you use the optional package-based add-flight flow.
+Use `packages/flight_status_tracker_add_flow.yaml` or create them in UI:
 
 - `input_text.fd_airline`
 - `input_text.fd_flight_number`
@@ -124,16 +145,11 @@ The Add Flight card expects these helpers/scripts to exist. Use the provided
    Settings → Devices & Services → Add Integration → Flight Status Tracker  
    Add API keys, choose providers, set cache/refresh options.
 
-2) **Install required frontend cards** (via HACS → Frontend)  
-   - Mushroom  
-   - auto‑entities  
-   - tailwindcss‑template‑card
+2) **(Optional) Install frontend cards** (via HACS → Frontend)  
+   Only required for the custom Lovelace examples in this README.
 
-3) **Create helpers + scripts**  
-   Use the **Setup Package** above or create them in UI.
-
-4) **Add Lovelace dashboards/cards**  
-   Copy the Flight Status and Manage Flights dashboards from the examples below.
+3) **Add Lovelace dashboards/cards** (optional)  
+   Copy the Flight Status and Manage Flights dashboards from the examples below, or just add the built-in entities.
 
 ## Uninstall / Cleanup
 
@@ -153,9 +169,16 @@ Use this if you want to fully remove the integration and its data.
 4) **Remove stored data (manual flights, preview, directory cache)**
    - Delete the following files from `/config/.storage/`:
      - `flight_status_tracker.manual_flights`
-     - `flight_status_tracker.preview`
+     - `flight_status_tracker.add_preview`
      - `flight_status_tracker.directory_cache`
    - Restart Home Assistant
+
+## Migrating from `flight_dashboard` (legacy domain)
+
+If you previously used the old domain `flight_dashboard`, you can import your old manual flight list on the new Home Assistant instance using:
+- `button.flight_status_tracker_import_legacy_flights`
+
+This imports from legacy storage key `flight_dashboard.manual_flights` into `flight_status_tracker.manual_flights` (non-destructive).
 
 5) **Remove Lovelace resources / custom cards (optional)**
    - If you installed custom cards only for this integration, uninstall via HACS → Frontend:

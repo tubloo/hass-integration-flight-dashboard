@@ -8,9 +8,8 @@ from __future__ import annotations
 DOMAIN = "flight_status_tracker"
 STORAGE_KEY_DIRECTORY = f"{DOMAIN}.directory_cache"
 
-# Keep platforms minimal while we stabilize.
-# Add "button"/"select" back only when those files are consistent.
-PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "button"]
+# Platforms
+PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "button", "text", "date"]
 
 # Schema
 SCHEMA_VERSION = 3

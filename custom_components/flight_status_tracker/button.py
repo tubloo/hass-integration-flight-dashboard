@@ -12,9 +12,19 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, EVENT_UPDATED
 from .services import SERVICE_CLEAR, SERVICE_REMOVE
-from .const import SERVICE_REFRESH_NOW, SERVICE_PRUNE_LANDED
+from .const import SERVICE_CLEAR_PREVIEW, SERVICE_PREVIEW_FLIGHT, SERVICE_REFRESH_NOW, SERVICE_PRUNE_LANDED
+from .legacy_migration import async_import_legacy_manual_flights
 from .preview_store import async_get_preview, async_set_preview
 from .manual_store import async_add_manual_flight_record
+from .ui_inputs_store import (
+    KEY_AIRLINE,
+    KEY_DATE,
+    KEY_DEP_AIRPORT,
+    KEY_FLIGHT_NUMBER,
+    KEY_NOTES,
+    KEY_TRAVELLERS,
+    async_load_inputs,
+)
 
 SELECT_ENTITY_ID = "select.flight_status_tracker_remove_flight"
 UPCOMING_SENSOR = "sensor.flight_status_tracker_upcoming_flights"
@@ -65,6 +75,7 @@ class FlightDashboardRemoveSelectedFlightButton(ButtonEntity):
     _attr_name = "Flight Dashboard Remove Selected Flight"
     _attr_unique_id = "flight_status_tracker_remove_selected_flight"
     _attr_icon = "mdi:airplane-remove"
+    _attr_suggested_object_id = "flight_status_tracker_remove_selected_flight"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -87,6 +98,7 @@ class FlightDashboardClearManualFlightsButton(ButtonEntity):
     _attr_name = "Flight Dashboard Clear Manual Flights"
     _attr_unique_id = "flight_status_tracker_clear_manual_flights"
     _attr_icon = "mdi:delete-sweep"
+    _attr_suggested_object_id = "flight_status_tracker_clear_manual_flights"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -99,6 +111,7 @@ class FlightDashboardRefreshNowButton(ButtonEntity):
     _attr_name = "Flight Dashboard Refresh Now"
     _attr_unique_id = "flight_status_tracker_refresh_now"
     _attr_icon = "mdi:refresh"
+    _attr_suggested_object_id = "flight_status_tracker_refresh_now"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -111,6 +124,7 @@ class FlightDashboardPruneLandedButton(ButtonEntity):
     _attr_name = "Flight Dashboard Remove Landed Flights"
     _attr_unique_id = "flight_status_tracker_remove_landed"
     _attr_icon = "mdi:airplane-off"
+    _attr_suggested_object_id = "flight_status_tracker_remove_landed"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -123,6 +137,7 @@ class FlightDashboardConfirmAddPreviewButton(ButtonEntity):
     _attr_name = "Flight Dashboard Confirm Add Preview"
     _attr_unique_id = "flight_status_tracker_confirm_add_preview"
     _attr_icon = "mdi:check-circle-outline"
+    _attr_suggested_object_id = "flight_status_tracker_confirm_add_preview"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -207,6 +222,7 @@ class FlightDashboardClearAddPreviewButton(ButtonEntity):
     _attr_name = "Flight Dashboard Clear Add Preview"
     _attr_unique_id = "flight_status_tracker_clear_add_preview"
     _attr_icon = "mdi:close-circle-outline"
+    _attr_suggested_object_id = "flight_status_tracker_clear_add_preview"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -214,6 +230,80 @@ class FlightDashboardClearAddPreviewButton(ButtonEntity):
     async def async_press(self) -> None:
         await async_set_preview(self.hass, None)
         self.hass.bus.async_fire(EVENT_UPDATED)
+
+
+class FlightStatusTrackerPreviewFromInputsButton(ButtonEntity):
+    _attr_name = "Flight Status Tracker Preview Flight"
+    _attr_unique_id = "flight_status_tracker_preview_from_inputs"
+    _attr_icon = "mdi:magnify"
+    _attr_suggested_object_id = "flight_status_tracker_preview_from_inputs"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def async_press(self) -> None:
+        inputs = await async_load_inputs(self.hass)
+        airline = str(inputs.get(KEY_AIRLINE) or "").strip().upper()
+        flight_number = str(inputs.get(KEY_FLIGHT_NUMBER) or "").strip()
+        dep_airport = str(inputs.get(KEY_DEP_AIRPORT) or "").strip().upper()
+        date_str = str(inputs.get(KEY_DATE) or "").strip()
+        travellers = str(inputs.get(KEY_TRAVELLERS) or "").strip()
+        notes = str(inputs.get(KEY_NOTES) or "").strip()
+
+        if not airline or not flight_number or not date_str:
+            await _notify(
+                self.hass,
+                "Flight Status Tracker",
+                "Set Airline, Flight number, and Date, then press Preview.",
+            )
+            return
+
+        data: dict[str, object] = {
+            "airline": airline,
+            "flight_number": flight_number,
+            "date": date_str,
+        }
+        if dep_airport:
+            data["dep_airport"] = dep_airport
+        if travellers:
+            data["travellers"] = travellers
+        if notes:
+            data["notes"] = notes
+
+        await self.hass.services.async_call(DOMAIN, SERVICE_PREVIEW_FLIGHT, data, blocking=True)
+
+
+class FlightStatusTrackerClearPreviewButton(ButtonEntity):
+    _attr_name = "Flight Status Tracker Clear Preview"
+    _attr_unique_id = "flight_status_tracker_clear_preview"
+    _attr_icon = "mdi:broom"
+    _attr_suggested_object_id = "flight_status_tracker_clear_preview"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def async_press(self) -> None:
+        await self.hass.services.async_call(DOMAIN, SERVICE_CLEAR_PREVIEW, {}, blocking=True)
+
+
+class FlightStatusTrackerImportLegacyFlightsButton(ButtonEntity):
+    _attr_name = "Flight Status Tracker Import Legacy Flights (flight_dashboard)"
+    _attr_unique_id = "flight_status_tracker_import_legacy_flights"
+    _attr_icon = "mdi:database-import-outline"
+    _attr_suggested_object_id = "flight_status_tracker_import_legacy_flights"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def async_press(self) -> None:
+        res = await async_import_legacy_manual_flights(self.hass)
+        imported = res.get("imported", 0)
+        skipped = res.get("skipped", 0)
+        await _notify(
+            self.hass,
+            "Flight Status Tracker",
+            f"Legacy import complete. Imported={imported}, skipped={skipped}.",
+        )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
@@ -225,5 +315,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             FlightDashboardPruneLandedButton(hass),
             FlightDashboardConfirmAddPreviewButton(hass),
             FlightDashboardClearAddPreviewButton(hass),
+            FlightStatusTrackerPreviewFromInputsButton(hass),
+            FlightStatusTrackerClearPreviewButton(hass),
+            FlightStatusTrackerImportLegacyFlightsButton(hass),
         ]
     )
