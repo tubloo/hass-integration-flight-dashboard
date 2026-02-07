@@ -34,9 +34,11 @@ Then restart Home Assistant.
 
 Finally, add the integration in **Settings → Devices & Services**.
 
-### HACS (future)
-HACS support is not enabled yet. Once the repository is made HACS‑ready, these
-instructions will be added.
+### HACS (Custom Repository)
+1. HACS → **⋮** → **Custom repositories**
+2. Add this repo URL and select **Integration**
+3. Install **Flight Dashboard** and restart Home Assistant
+4. Add the integration in **Settings → Devices & Services**
 
 ## Setup Package (Helpers + Scripts)
 
